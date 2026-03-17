@@ -1,24 +1,23 @@
-name: "macOS RustDesk - Continuous OCR"
+name: "macOS RustDesk - File-Based ID & PW"
 
 on:
   workflow_dispatch:
     inputs:
       RUSTDESK_PASSWORD:
-        description: "Set a custom RustDesk password"
+        description: "Set a custom fixed password (optional)"
         default: "password123"
         required: true
 
 jobs:
   rustdesk:
-    name: "🦀 OCR Monitoring"
+    name: "🦀 Config Extraction"
     runs-on: macos-15
 
     steps:
-      - name: "🦀 Install Tools"
+      - name: "🦀 Install RustDesk"
         run: |
           brew install --cask rustdesk
-          brew install tesseract
-          echo "✅ Tools installed"
+          echo "✅ RustDesk installed"
 
       - name: "🔓 Grant Permissions"
         run: |
@@ -32,54 +31,42 @@ jobs:
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
           open "$RUSTDESK_APP"
+          # We set your fixed password, but the one-time one will still exist
           "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           echo "✅ RustDesk started"
 
-      - name: "🔄 Connection Loop with Continuous OCR"
+      - name: "🔄 Extraction & Monitoring Loop"
         run: |
-          # Define the OCR and Screenshot function
-          capture_and_ocr() {
-            echo "📸 Capturing screen..."
-            # Use absolute paths and ensure the directory exists
-            local IMG_PATH="/tmp/rust_screen.png"
-            local OUT_PATH="/tmp/ocr_results"
+          # Function to find and print credentials from the config file
+          show_creds() {
+            CONF="$HOME/Library/Application Support/RustDesk/config/client.toml"
             
-            # Take screenshot
-            screencapture -x "$IMG_PATH"
-            sleep 2 # Small buffer to ensure file is written
-            
-            if [ ! -f "$IMG_PATH" ]; then
-              echo "❌ Error: Screenshot file not found!"
-              return
+            if [ -f "$CONF" ]; then
+              # Extract ID
+              ID=$(grep "id =" "$CONF" | cut -d"'" -f2)
+              # Extract the One-Time Password
+              # Note: If it's encrypted, this might show the hash, but usually 
+              # on fresh installs, it stores the current session PW clearly.
+              OTP=$(grep "password =" "$CONF" | cut -d"'" -f2)
+              
+              echo "------------------------------------------------------"
+              echo "⏰ UPDATE: $(date)"
+              echo "🆔 REMOTE ID: $ID"
+              echo "🎲 ONE-TIME PASSWORD: $OTP"
+              echo "🔑 FIXED PASSWORD:    ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+              echo "------------------------------------------------------"
+            else
+              echo "⏳ Waiting for config file to be generated..."
             fi
-
-            # Perform OCR
-            tesseract "$IMG_PATH" "$OUT_PATH" -l eng
-            
-            # Extract ID and OTP
-            # RustDesk IDs are usually 9-10 digits with spaces
-            local RAW_ID=$(grep -E -o '[0-9 ]{9,12}' "${OUT_PATH}.txt" | tr -d ' ' | head -n 1)
-            # Find the word 'password' and take the next non-empty line
-            local RAW_OTP=$(grep -A 2 -i "password" "${OUT_PATH}.txt" | tail -n 1 | xargs)
-
-            # Upload to Cloud
-            local URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@$IMG_PATH" https://catbox.moe/user/api.php)
-
-            echo "------------------------------------------------------"
-            echo "⏰ UPDATE: $(date)"
-            echo "🆔 DETECTED ID: $RAW_ID"
-            echo "🎲 ONE-TIME PW: $RAW_OTP"
-            echo "🔗 SCREENSHOT:  $URL"
-            echo "------------------------------------------------------"
           }
 
-          echo "⏳ Initializing first capture in 25s..."
-          sleep 25
-          capture_and_ocr
+          echo "🚀 MONITORING STARTED..."
+          sleep 30
+          show_creds
 
           PREVIOUS_STATE="off"
           while true; do
-            # Monitor network for RustDesk connection
+            # Check for active connection
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
 
             if [ "$CONN_COUNT" -gt 0 ]; then
@@ -89,10 +76,11 @@ jobs:
                 fi
             else
                 if [ "$PREVIOUS_STATE" == "on" ]; then
-                    echo "⚠️ Disconnected! Refreshing credentials..."
-                    open -a "RustDesk" # Bring to front
-                    sleep 5
-                    capture_and_ocr
+                    echo "⚠️ Disconnected. Refreshing credentials from file..."
+                    # Force a refresh of the GUI to trigger a new password if needed
+                    open -a "RustDesk"
+                    sleep 10
+                    show_creds
                     PREVIOUS_STATE="off"
                 fi
             fi
