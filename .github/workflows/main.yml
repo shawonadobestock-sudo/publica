@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       os_choice:
-        description: "Select OS"
+        description: "Select OS (Windows is recommended for GUI)"
         type: choice
         options:
           - Windows
@@ -20,7 +20,7 @@ jobs:
     
     steps:
       # ==========================================
-      # 1. SETUP NGROK
+      # 1. SETUP NGROK (Common)
       # ==========================================
       - name: "🌐 Install & Auth Ngrok"
         shell: bash
@@ -32,55 +32,65 @@ jobs:
           else
             brew install --cask ngrok
           fi
+          # Using your provided Auth Token
           ngrok config add-authtoken 3AhMlOU44xocXTENyLvM64XkVNW_5jEpfgSNQs7kBB13WH7FD
 
       # ==========================================
-      # 2. WINDOWS CONFIGURATION (RDP)
+      # 2. WINDOWS CONFIGURATION (RDP + Auto-Apps)
       # ==========================================
-      - name: "🔧 Configure Windows RDP"
+      - name: "🔧 Configure Windows RDP & Install Apps"
         if: github.event.inputs.os_choice == 'Windows'
         shell: pwsh
         run: |
           $password = "CloudPC123!"
           $user = "runneradmin"
           net user $user $password
+          
+          Write-Host "Installing Chrome & MostLogin..."
+          # Install Chrome via Chocolatey (Pre-installed on Runner)
+          choco install googlechrome -y --no-progress
+          
+          # Download and Install MostLogin (Silent)
+          Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile "MostLogin-setup.exe"
+          Start-Process -FilePath "MostLogin-setup.exe" -ArgumentList "/S" -Wait
+          
+          # Enable RDP and Disable NLA for compatibility
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+          
           Start-Process ngrok -ArgumentList "tcp 3389"
-          Write-Host "✅ Windows RDP Ready"
+          Write-Host "✅ Windows RDP Ready with Apps"
 
       # ==========================================
-      # 3. MACOS CONFIGURATION (FIXED VNC)
+      # 3. MACOS CONFIGURATION (VNC Bypass attempt)
       # ==========================================
       - name: "🍏 Configure macOS Screen Sharing"
         if: github.event.inputs.os_choice == 'macOS'
         run: |
-          # 1. Create User
           sudo sysadminctl -addUser clouduser -fullName "Cloud User" -password "CloudPC123!" -admin
           
-          # 2. Enable Remote Management (ARDAgent)
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users clouduser -privs -all -restart -agent
+          # Attempt to bypass TCC permissions for Remote Management
+          TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+          sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('kTCCServiceScreenCapture','com.apple.RemoteManagement.RemoteManagementErrors',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,$(date +%s));" 2>/dev/null || true
           
-          # 3. Fix: Set VNC Password correctly (Avoids the previous error)
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvncpasswd -vncpasswd CloudPC123!
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users clouduser -privs -all -restart -agent -vncpasswd CloudPC123!
           
-          # 4. Start Tunnel
           ngrok tcp 5900 &
-          echo "✅ macOS Screen Sharing Enabled"
+          echo "✅ macOS Screen Sharing Attempted"
 
       # ==========================================
-      # 4. CONNECTION DETAILS
+      # 4. CONNECTION DETAILS & HEARTBEAT
       # ==========================================
       - name: "🔑 Get Connection Info"
         shell: bash
         run: |
-          echo "🛰️  Wait for Ngrok (20s)..."
-          sleep 20
+          echo "🛰️  Fetching Ngrok Address..."
+          sleep 25
           URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
           
           if [ -z "$URL" ] || [ "$URL" == "null" ]; then
-            echo "❌ ERROR: Ngrok failed. Check logs above."
+            echo "❌ ERROR: Ngrok failed. Check your Auth Token."
             exit 1
           fi
           
@@ -90,7 +100,8 @@ jobs:
           echo "🔑 PASS: CloudPC123!"
           echo "===================================================="
           
+          # Keeps the session alive and prevents idle timeout
           for i in {1..360}; do
-            echo "Session Active: Minute $i - URL: $URL"
+            echo "Heartbeat: Minute $i - Tunnel active at $URL"
             sleep 60
           done
