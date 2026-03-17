@@ -16,11 +16,11 @@ jobs:
   deploy-cloud-pc:
     name: "🚀 ${{ github.event.inputs.os_choice }} Runner"
     runs-on: ${{ github.event.inputs.os_choice == 'Windows' && 'windows-2022' || 'macos-15' }}
-    timeout-minutes: 360 # 6 Hour Maximum
+    timeout-minutes: 360 
     
     steps:
       # ==========================================
-      # 1. SETUP NGROK (Common for both)
+      # 1. SETUP NGROK
       # ==========================================
       - name: "🌐 Install & Auth Ngrok"
         shell: bash
@@ -28,11 +28,14 @@ jobs:
           if [ "$RUNNER_OS" == "Windows" ]; then
             curl -L -o ngrok.zip https://bin.equinox.io/c/b34edq6jhPr/ngrok-v3-stable-windows-amd64.zip
             unzip ngrok.zip
+            # Move to a known location for Windows
+            mv ngrok.exe /usr/local/bin/ 2>/dev/null || mv ngrok.exe C:/Windows/System32/
           else
             brew install --cask ngrok
           fi
-          # Using your provided Auth Token
-          ./ngrok config add-authtoken 3AhMlOU44xocXTENyLvM64XkVNW_5jEpfgSNQs7kBB13WH7FD
+          
+          # Authenticate using the global command
+          ngrok config add-authtoken 3AhMlOU44xocXTENyLvM64XkVNW_5jEpfgSNQs7kBB13WH7FD
 
       # ==========================================
       # 2. WINDOWS CONFIGURATION (RDP)
@@ -41,19 +44,17 @@ jobs:
         if: github.event.inputs.os_choice == 'Windows'
         shell: pwsh
         run: |
-          # Set User Password (User: runneradmin)
           $password = "CloudPC123!"
           $user = "runneradmin"
           net user $user $password
           
-          # Enable RDP in Registry
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
           
-          # Start Ngrok Tunnel for RDP (Port 3389)
-          Start-Process ./ngrok.exe -ArgumentList "tcp 3389"
-          Write-Host "✅ Windows RDP Enabled for user: $user"
+          # Start tunnel globally
+          Start-Process ngrok -ArgumentList "tcp 3389"
+          Write-Host "✅ Windows RDP Enabled"
 
       # ==========================================
       # 3. MACOS CONFIGURATION (VNC)
@@ -61,40 +62,38 @@ jobs:
       - name: "🍏 Configure macOS Screen Sharing"
         if: github.event.inputs.os_choice == 'macOS'
         run: |
-          # Set User & Password
           sudo sysadminctl -addUser clouduser -fullName "Cloud User" -password "CloudPC123!" -admin
           
-          # Enable Screen Sharing (VNC)
           sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist com.apple.screensharing -dict Disabled -bool false
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
           
-          # Start Ngrok Tunnel for VNC (Port 5900)
-          ./ngrok tcp 5900 &
+          # Start tunnel globally in background
+          ngrok tcp 5900 &
           echo "✅ macOS Screen Sharing Enabled"
 
       # ==========================================
-      # 4. CONNECTION DETAILS & KEEP ALIVE
+      # 4. CONNECTION DETAILS
       # ==========================================
-      - name: "🔑 Get Connection Info & Wait"
+      - name: "🔑 Get Connection Info"
         shell: bash
         run: |
-          echo "===================================================="
-          echo "🛰️  FETCHING CONNECTION ADDRESS..."
-          sleep 15
-          # Get the public URL from Ngrok local API
+          echo "🛰️  Wait for Ngrok to initialize..."
+          sleep 20
+          
+          # Query Ngrok API for the public address
           URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
           
           if [ -z "$URL" ] || [ "$URL" == "null" ]; then
-            echo "❌ ERROR: Ngrok failed to start. Check if your Auth Token is valid."
+            echo "❌ ERROR: Ngrok failed to provide a URL. Check your Auth Token."
             exit 1
           fi
           
+          echo "===================================================="
           echo "✅ CONNECTION ADDRESS: $URL"
           echo "🔑 PASSWORD: CloudPC123!"
           echo "===================================================="
           
-          # Heartbeat loop to keep runner alive and log active status
           for i in {1..360}; do
-            echo "Keep-alive: Minute $i - Tunnel active at $URL"
+            echo "Keep-alive: Minute $i - Active at $URL"
             sleep 60
           done
