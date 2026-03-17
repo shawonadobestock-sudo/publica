@@ -31,7 +31,8 @@ jobs:
           else
             brew install --cask ngrok
           fi
-          ./ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+          # Using your provided Auth Token
+          ./ngrok config add-authtoken 3AhMlOU44xocXTENyLvM64XkVNW_5jEpfgSNQs7kBB13WH7FD
 
       # ==========================================
       # 2. WINDOWS CONFIGURATION (RDP)
@@ -60,8 +61,7 @@ jobs:
       - name: "🍏 Configure macOS Screen Sharing"
         if: github.event.inputs.os_choice == 'macOS'
         run: |
-          # Set Password for 'runner' user
-          sudo sysadminctl -deleteUser macadmin 2>/dev/null || true
+          # Set User & Password
           sudo sysadminctl -addUser clouduser -fullName "Cloud User" -password "CloudPC123!" -admin
           
           # Enable Screen Sharing (VNC)
@@ -80,21 +80,20 @@ jobs:
         run: |
           echo "===================================================="
           echo "🛰️  FETCHING CONNECTION ADDRESS..."
-          sleep 10
-          # Get the public URL from Ngrok API
+          sleep 15
+          # Get the public URL from Ngrok local API
           URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
           
           if [ -z "$URL" ] || [ "$URL" == "null" ]; then
-            echo "❌ ERROR: Ngrok failed to start or Auth Token is invalid."
+            echo "❌ ERROR: Ngrok failed to start. Check if your Auth Token is valid."
             exit 1
           fi
           
           echo "✅ CONNECTION ADDRESS: $URL"
-          echo "👤 USERNAME: ${GITHUB_EVENT_INPUTS_OS_CHOICE == 'Windows' && 'runneradmin' || 'clouduser'}"
           echo "🔑 PASSWORD: CloudPC123!"
           echo "===================================================="
           
-          # Heartbeat loop to keep runner alive
+          # Heartbeat loop to keep runner alive and log active status
           for i in {1..360}; do
             echo "Keep-alive: Minute $i - Tunnel active at $URL"
             sleep 60
