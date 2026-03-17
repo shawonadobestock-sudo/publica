@@ -135,43 +135,59 @@ jobs:
       
       - name: "🚀 Configure AnyDesk Daemon & Permanent Password"
         run: |
-          set +e  # Don't exit on errors
+          set +e
           
-          # 1. Launch AnyDesk
-          echo "🚀 Launching AnyDesk..."
-          open -a /Applications/AnyDesk.app
-          sleep 15
+          echo "🚀 Starting AnyDesk Daemon..."
           
-          # 2. Try multiple methods to set password
+          # 1. Start AnyDesk as daemon with sudo
+          sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk &
+          ANYDESK_PID=$!
+          sleep 20
+          
+          # 2. Wait for daemon to be responsive
+          for i in {1..10}; do
+            if sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --version &>/dev/null; then
+              echo "✅ AnyDesk daemon responsive on attempt $i"
+              break
+            fi
+            sleep 3
+          done
+          
+          # 3. Set password using bash script wrapper
           echo "🔐 Configuring permanent password..."
+          sudo bash -c 'cat > /tmp/set_anydesk_pass.sh << '"'"'SCRIPT'"'"'
+          #!/bin/bash
+          /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password <<EOF
+          ${{ env.MAC_PASS }}
+          EOF
+          SCRIPT
+          chmod +x /tmp/set_anydesk_pass.sh
+          /tmp/set_anydesk_pass.sh' 2>/dev/null || echo "⚠️  Password setting may require GUI interaction"
           
-          # Method A: Via command line (may not work on all versions)
-          echo "${{ env.MAC_PASS }}" | /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password 2>/dev/null
-          
-          # Method B: Via defaults write
-          defaults write com.anydesk.anydesk permanentPassword "${{ env.MAC_PASS }}" 2>/dev/null
-          
-          # Method C: Via plist manipulation
-          /usr/libexec/PlistBuddy -c "Set :permanentPassword ${{ env.MAC_PASS }}" ~/Library/Preferences/com.anydesk.anydesk.plist 2>/dev/null || true
-          
-          # 3. Extract AnyDesk ID
+          # 4. Get AnyDesk ID
           echo "📍 Retrieving AnyDesk ID..."
-          ANYDESK_ID=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null)
+          ANYDESK_ID=$(sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null || echo "RETRIEVING...")
           
-          if [ -z "$ANYDESK_ID" ]; then
-            ANYDESK_ID=$(defaults read com.anydesk.anydesk id 2>/dev/null || echo "PENDING")
+          sleep 5
+          
+          if [ -z "$ANYDESK_ID" ] || [ "$ANYDESK_ID" = "RETRIEVING..." ]; then
+            ANYDESK_ID=$(sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null || echo "CHECK_GUI")
           fi
           
           echo "ANY_ID=$ANYDESK_ID" >> $GITHUB_ENV
           
-          # 4. Output summary
+          # 5. Verify running
+          if pgrep -f "AnyDesk" > /dev/null; then
+            echo "✅ AnyDesk is running"
+          fi
+          
           echo "============================================================"
           echo "✅ AnyDesk Configuration Complete"
           echo "🔑 Permanent Password: ${{ env.MAC_PASS }}"
           echo "🆔 AnyDesk Address: $ANYDESK_ID"
           echo "============================================================"
           
-          set -e  # Re-enable error exit
+          set -e
       
       - name: "⏳ Connection Window"
         run: |
