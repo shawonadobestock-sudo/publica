@@ -44,34 +44,18 @@ jobs:
             Write-Error "❌ Missing CRD Code!"
             exit 1
           }
-      - name: "🔊 Enable Audio"
-        run: |
-          Set-Service -Name Audiosrv -StartupType Automatic
-          Start-Service -Name Audiosrv
       - name: "🔧 Install CRD & Virtual Audio"
         run: |
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
-          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
-          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
-          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
-      - name: "🕵️‍♂️ Silent Install & Launch MostLogin"
-        run: |
-          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          $mlInstaller = "$userDownloads\MostLogin-setup.exe"
-          Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile $mlInstaller -UseBasicParsing
-          Start-Process -FilePath $mlInstaller -ArgumentList "/S" -Wait
-          $mlPath = "C:\Program Files (x86)\MostLogin\MostLogin.exe"
-          if (Test-Path $mlPath) { Start-Process -FilePath $mlPath }
       - name: "🌟 Start Chrome Remote Desktop"
         run: cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
       - name: "⏳ Keep Alive"
         run: while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (Auto-Reopen & Conditional Capture)
+  # MACOS JOB (Fixed Initial Screenshot & Monitoring)
   # ==========================================
   macos-setup:
     name: "🍏 macOS Remote Runner (macOS 14)"
@@ -84,16 +68,17 @@ jobs:
       - name: "🖥️ Install Remote Tools"
         run: |
           brew install --cask --no-quarantine rustdesk
+          # MostLogin Installation
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
           MOUNT_ML=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
           sudo cp -R "$MOUNT_ML"/*.app /Applications/
           sudo hdiutil detach "$MOUNT_ML" -force
           open /Applications/RustDesk.app
-          sleep 15
+          sleep 10
 
       - name: "📊 Smart Monitoring Loop"
         run: |
-          echo "🚀 Monitoring Connection State..."
+          echo "🚀 Starting High-Frequency Monitoring..."
           
           # LOOP 1: Log ID/PW every 1s
           (
@@ -108,25 +93,27 @@ jobs:
             done
           ) &
 
-          # LOOP 2: Auto-Open & Screenshot on Disconnect
+          # LOOP 2: Forced Initial Screenshot then Conditional Loop
           (
+            # 1. FORCE INITIAL CAPTURE (So you aren't waiting)
+            echo "[$(date +%T)] 📸 Capturing Initial Setup Screen..."
+            screencapture -x /tmp/initial.png
+            curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/initial.png" https://catbox.moe/user/api.php
+            echo "" # New line for log clarity
+
             while true; do
-              # Check if anyone is connected to RustDesk (Default port 21116/21117 or established TCP)
-              # Note: Checking for established TCP connections on common RustDesk ports
-              CONNECTION_CHECK=$(netstat -an | grep ESTABLISHED | grep -E "\.2111[6-9]|\.443")
+              # Check specifically for established connections on RustDesk ports
+              # 21116=ID Server, 21117=Relay, 21118/21119=Web/Direct
+              CONNECTION_CHECK=$(netstat -an | grep ESTABLISHED | grep -E "\.2111[7-9]")
               
               if [ -z "$CONNECTION_CHECK" ]; then
-                echo "[$(date +%T)] ⭕ Disconnected. Opening GUI & Capturing..."
-                
-                # Bring RustDesk to front
+                # No connection found -> Open GUI and capture
                 open /Applications/RustDesk.app
-                
-                # Capture and Upload
                 screencapture -x /tmp/status.png
                 URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/status.png" https://catbox.moe/user/api.php)
-                echo "[$(date +%T)] 📸 Re-connect here: $URL"
+                echo "[$(date +%T)] 📸 Disconnected - GUI Live: $URL"
               else
-                echo "[$(date +%T)] 🟢 User Connected. Pausing screenshots."
+                echo "[$(date +%T)] 🟢 User Connected. Monitoring active..."
               fi
               sleep 5
             done
