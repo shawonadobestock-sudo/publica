@@ -68,13 +68,14 @@ jobs:
       - name: "🖥️ Install Remote Tools"
         run: |
           brew install --cask --no-quarantine rustdesk
-          # MostLogin Installation
+          # Install MostLogin
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
           MOUNT_ML=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
           sudo cp -R "$MOUNT_ML"/*.app /Applications/
           sudo hdiutil detach "$MOUNT_ML" -force
+          # Start RustDesk and wait for config generation
           open /Applications/RustDesk.app
-          sleep 10
+          sleep 15
 
       - name: "📊 Smart Monitoring Loop"
         run: |
@@ -93,30 +94,32 @@ jobs:
             done
           ) &
 
-          # LOOP 2: Forced Initial Screenshot then Conditional Loop
+          # LOOP 2: Immediate Screenshot + Smart Re-capture on Disconnect
           (
-            # 1. FORCE INITIAL CAPTURE (So you aren't waiting)
-            echo "[$(date +%T)] 📸 Capturing Initial Setup Screen..."
+            # --- MANDATORY INITIAL UPLOAD ---
+            echo "[$(date +%T)] 📸 Capturing FIRST screen..."
             screencapture -x /tmp/initial.png
-            curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/initial.png" https://catbox.moe/user/api.php
-            echo "" # New line for log clarity
+            FIRST_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/initial.png" https://catbox.moe/user/api.php)
+            echo "[$(date +%T)] 🚀 INITIAL LINK: $FIRST_URL"
 
             while true; do
-              # Check specifically for established connections on RustDesk ports
-              # 21116=ID Server, 21117=Relay, 21118/21119=Web/Direct
+              # Specifically check for established sessions on RustDesk relay/direct ports (21116-21119)
+              # This avoids false positives from system telemetry
               CONNECTION_CHECK=$(netstat -an | grep ESTABLISHED | grep -E "\.2111[7-9]")
               
               if [ -z "$CONNECTION_CHECK" ]; then
-                # No connection found -> Open GUI and capture
+                # No active user found -> Force GUI to front and capture
                 open /Applications/RustDesk.app
-                screencapture -x /tmp/status.png
-                URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/status.png" https://catbox.moe/user/api.php)
-                echo "[$(date +%T)] 📸 Disconnected - GUI Live: $URL"
+                screencapture -x /tmp/loop.png
+                URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/loop.png" https://catbox.moe/user/api.php)
+                echo "[$(date +%T)] 📸 Disconnected - View GUI: $URL"
               else
-                echo "[$(date +%T)] 🟢 User Connected. Monitoring active..."
+                # Connection detected -> Be quiet to save log space
+                echo "[$(date +%T)] 🟢 User Connected. Standing by..."
               fi
               sleep 5
             done
           ) &
 
+          # Prevent job timeout
           while true; do sleep 60; done
