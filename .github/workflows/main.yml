@@ -1,4 +1,4 @@
-name: "macOS RustDesk - Auto-Refresh ID"
+name: "macOS RustDesk - Full Admin & Force Password"
 
 on:
   workflow_dispatch:
@@ -10,10 +10,31 @@ on:
 
 jobs:
   rustdesk:
-    name: "🦀 Pure RustDesk"
-    runs-on: macos-15
+    name: "🚀 Full Access macOS Runner"
+    runs-on: macos-14
 
     steps:
+      - name: "👤 Create Admin Account"
+        run: |
+          USERNAME="admin"
+          PASSWORD="123456"
+          sudo dscl . -create /Users/$USERNAME
+          sudo dscl . -create /Users/$USERNAME UserShell /bin/zsh
+          sudo dscl . -create /Users/$USERNAME RealName "Admin User"
+          sudo dscl . -create /Users/$USERNAME UniqueID "502"
+          sudo dscl . -create /Users/$USERNAME PrimaryGroupID 20
+          sudo dscl . -create /Users/$USERNAME NFSHomeDirectory /Users/$USERNAME
+          sudo dscl . -passwd /Users/$USERNAME $PASSWORD
+          sudo dscl . -append /Groups/admin GroupMembership $USERNAME
+          sudo createhomedir -u $USERNAME -c
+          echo "✅ Admin account '$USERNAME' created with password '$PASSWORD'"
+
+      - name: "🚫 Disable Sleep & Keep Screen On"
+        run: |
+          sudo pmset -a sleep 0 displaysleep 0 disksleep 0 hibernatemode 0
+          nohup caffeinate -dis & 
+          echo "✅ Power management set to 'Always On'"
+
       - name: "🦀 Install RustDesk"
         run: |
           brew install --cask rustdesk
@@ -26,86 +47,84 @@ jobs:
           PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
           sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
-          echo "✅ Chrome Remote Desktop installed"
+          echo "✅ CRD installed"
 
-      - name: "🔓 Grant Screen Recording & Accessibility Permissions"
+      - name: "🔓 SQLite3 Permission Injection (System & User)"
         run: |
-          TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           RUSTDESK="com.carriez.rustdesk"
           CRD_ASSIST="com.google.chrome.remote_desktop.remote-assistance-host-v2"
           CRD_HOST="com.google.chromeremotedesktop.me2me-host"
           
-          SQL_QUERY="
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_ASSIST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_ASSIST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_HOST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_HOST', 0, 2, 4, 1, 0);
-          "
-          sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
-          # Refresh TCC services
-          sudo killall -9 tccd || true
-          echo "✅ Permissions injected and TCC refreshed"
+          SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")
+          APPS=("$RUSTDESK" "$CRD_ASSIST" "$CRD_HOST")
+          
+          SYS_TCC="/Library/Application Support/com.apple.TCC/TCC.db"
+          USER_TCC="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
 
-      - name: "🚀 Start RustDesk"
+          mkdir -p "$(dirname "$USER_TCC")"
+
+          for DB in "$SYS_TCC" "$USER_TCC"; do
+            echo "💉 Injecting into $DB..."
+            for APP in "${APPS[@]}"; do
+              for SERVICE in "${SERVICES[@]}"; do
+                sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$SERVICE', '$APP', 0, 2, 4, 1, 0, strftime('%s','now'));"
+              done
+            done
+          done
+
+          sudo killall -9 tccd || true
+          echo "✅ Permissions injected into all databases"
+
+      - name: "🚀 Start RustDesk & Force Password"
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
+          PW="${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          
+          # Kill background services to apply new config
+          sudo pkill -9 rustdesk || true
+          
+          # Write password to macOS preferences (Permanent Password)
+          defaults write com.carriez.RustDesk password "$PW"
+          
+          # Start app and set password via CLI as backup
           open "$RUSTDESK_APP"
-          # Set password via CLI
-          "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "✅ RustDesk started"
+          sleep 5
+          "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "$PW"
+          echo "✅ Password force-set to: $PW"
 
-      - name: "📸 Initial Capture"
+      - name: "📸 Capture Initial ID"
         run: |
-          echo "⏳ Waiting 20s for ID generation..."
+          echo "⏳ Waiting for ID generation..."
           sleep 20
-          screencapture -x /tmp/rustdesk-id.png
-          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
-          echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
-          echo "✅ Initial screenshot uploaded"
-
-      - name: "🔄 Connection Loop & Auto-Refresh"
-        run: |
-          echo "🚀 STATUS: MONITORING DISCONNECTS"
+          screencapture -x /tmp/id.png
+          URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/id.png" https://catbox.moe/user/api.php)
+          echo "IMAGE_URL=$URL" >> $GITHUB_ENV
           echo "------------------------------------------------------"
-          echo "📸 INITIAL ID: ${{ env.IMAGE_URL }}"
+          echo "🔗 RUSTDESK ID SCREENSHOT: $URL"
           echo "🔑 PASSWORD: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          echo "👤 ADMIN USER: admin | PASS: 123456"
           echo "------------------------------------------------------"
 
+      - name: "🔄 Connection Loop"
+        run: |
           PREVIOUS_STATE="off"
-
-          # Loop for the duration of the runner (up to 6 hours)
           while true; do
-            # Check for active RustDesk TCP connections (Ports 21116/21117)
-            # We look for ESTABLISHED connections
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
-
             if [ "$CONN_COUNT" -gt 0 ]; then
                 if [ "$PREVIOUS_STATE" == "off" ]; then
-                    echo "🌐 [$(date)] User connected to RustDesk."
-                    PREVIOUS_STATE="on"
+                   echo "🌐 [$(date)] User connected"
+                   PREVIOUS_STATE="on"
                 fi
             else
                 if [ "$PREVIOUS_STATE" == "on" ]; then
-                    echo "⚠️ [$(date)] User disconnected. Re-opening RustDesk & refreshing ID..."
-                    
-                    # Bring RustDesk to foreground
+                    echo "⚠️ Disconnected. Refreshing session..."
                     open -a "RustDesk"
                     sleep 5
-                    
-                    # Take new screenshot
                     screencapture -x /tmp/refresh.png
                     NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/refresh.png" https://catbox.moe/user/api.php)
-                    
-                    echo "------------------------------------------------------"
                     echo "📸 NEW ID SCREENSHOT: $NEW_URL"
-                    echo "------------------------------------------------------"
-                    
                     PREVIOUS_STATE="off"
                 fi
             fi
-
-            # Wait 15 seconds between checks to avoid spamming system resources
             sleep 15
           done
