@@ -1,4 +1,4 @@
-name: "macOS RustDesk - Auto-Refresh ID"
+name: "macOS RustDesk - OCR ID & Password"
 
 on:
   workflow_dispatch:
@@ -10,102 +10,89 @@ on:
 
 jobs:
   rustdesk:
-    name: "🦀 Pure RustDesk"
+    name: "🦀 Pure RustDesk with OCR"
     runs-on: macos-15
 
     steps:
-      - name: "🦀 Install RustDesk"
+      - name: "🦀 Install RustDesk & OCR Tools"
         run: |
           brew install --cask rustdesk
-          echo "✅ RustDesk installed"
+          brew install tesseract
+          echo "✅ Tools installed"
 
-      - name: "🖥️ Install Chrome Remote Desktop"
-        run: |
-          curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
-          sudo hdiutil attach /tmp/crd.dmg -nobrowse
-          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
-          sudo installer -pkg "$PKG_PATH" -target /
-          sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
-          echo "✅ Chrome Remote Desktop installed"
-
-      - name: "🔓 Grant Screen Recording & Accessibility Permissions"
+      - name: "🔓 Grant Permissions"
         run: |
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           RUSTDESK="com.carriez.rustdesk"
-          CRD_ASSIST="com.google.chrome.remote_desktop.remote-assistance-host-v2"
-          CRD_HOST="com.google.chromeremotedesktop.me2me-host"
-          
           SQL_QUERY="
             INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0);
             INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_ASSIST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_ASSIST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_HOST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_HOST', 0, 2, 4, 1, 0);
           "
           sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
-          # Refresh TCC services
           sudo killall -9 tccd || true
-          echo "✅ Permissions injected and TCC refreshed"
 
       - name: "🚀 Start RustDesk"
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
           open "$RUSTDESK_APP"
-          # Set password via CLI
           "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "✅ RustDesk started"
+          sleep 20 # Wait for ID to generate
 
-      - name: "📸 Initial Capture"
+      - name: "🔍 Capture & OCR Credentials"
+        id: ocr_step
         run: |
-          echo "⏳ Waiting 20s for ID generation..."
-          sleep 20
-          screencapture -x /tmp/rustdesk-id.png
-          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
-          echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
-          echo "✅ Initial screenshot uploaded"
+          # 1. Take the screenshot
+          screencapture -x /tmp/screen.png
+          
+          # 2. Use Tesseract to read the text
+          # We tell Tesseract to look specifically for digits/text
+          tesseract /tmp/screen.png /tmp/output
+          
+          echo "--- RAW OCR DATA ---"
+          cat /tmp/output.txt
+          echo "--------------------"
 
-      - name: "🔄 Connection Loop & Auto-Refresh"
+          # 3. Extract ID (looking for 9-10 digit numbers with spaces)
+          RD_ID=$(grep -E -o '[0-9 ]{9,12}' /tmp/output.txt | tr -d ' ' | head -n 1)
+          
+          # 4. Extract One-time Password (looking for the string after 'password')
+          RD_OTP=$(grep -A 1 "password" /tmp/output.txt | tail -n 1 | tr -d ' ')
+
+          echo "DETECTED_ID=$RD_ID" >> $GITHUB_ENV
+          echo "DETECTED_OTP=$RD_OTP" >> $GITHUB_ENV
+
+      - name: "🌐 Upload & Log Results"
         run: |
-          echo "🚀 STATUS: MONITORING DISCONNECTS"
+          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/screen.png" https://catbox.moe/user/api.php)
+          
+          echo "🚀 STATUS: READY TO CONNECT"
           echo "------------------------------------------------------"
-          echo "📸 INITIAL ID: ${{ env.IMAGE_URL }}"
-          echo "🔑 PASSWORD: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          echo "🆔 RUSTDESK ID: ${{ env.DETECTED_ID }}"
+          echo "🔑 FIXED PW:    ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          echo "🎲 ONE-TIME PW: ${{ env.DETECTED_OTP }}"
+          echo "📸 SCREENSHOT:  $IMAGE_URL"
           echo "------------------------------------------------------"
 
+      - name: "🔄 Monitor Loop"
+        run: |
           PREVIOUS_STATE="off"
-
-          # Loop for the duration of the runner (up to 6 hours)
           while true; do
-            # Check for active RustDesk TCP connections (Ports 21116/21117)
-            # We look for ESTABLISHED connections
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
-
             if [ "$CONN_COUNT" -gt 0 ]; then
-                if [ "$PREVIOUS_STATE" == "off" ]; then
-                    echo "🌐 [$(date)] User connected to RustDesk."
-                    PREVIOUS_STATE="on"
-                fi
+                PREVIOUS_STATE="on"
             else
                 if [ "$PREVIOUS_STATE" == "on" ]; then
-                    echo "⚠️ [$(date)] User disconnected. Re-opening RustDesk & refreshing ID..."
-                    
-                    # Bring RustDesk to foreground
+                    echo "⚠️ Disconnected. Refreshing..."
                     open -a "RustDesk"
                     sleep 5
-                    
-                    # Take new screenshot
-                    screencapture -x /tmp/refresh.png
-                    NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/refresh.png" https://catbox.moe/user/api.php)
-                    
-                    echo "------------------------------------------------------"
-                    echo "📸 NEW ID SCREENSHOT: $NEW_URL"
-                    echo "------------------------------------------------------"
-                    
+                    screencapture -x /tmp/screen.png
+                    # Re-run OCR if you want the NEW one-time password
+                    tesseract /tmp/screen.png /tmp/output
+                    NEW_ID=$(grep -E -o '[0-9 ]{9,12}' /tmp/output.txt | tr -d ' ' | head -n 1)
+                    NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/screen.png" https://catbox.moe/user/api.php)
+                    echo "NEW ID: $NEW_ID | NEW URL: $NEW_URL"
                     PREVIOUS_STATE="off"
                 fi
             fi
-
-            # Wait 15 seconds between checks to avoid spamming system resources
             sleep 15
           done
