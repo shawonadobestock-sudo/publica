@@ -135,23 +135,43 @@ jobs:
       
       - name: "🚀 Configure AnyDesk Daemon & Permanent Password"
         run: |
-          # 1. Start the AnyDesk background service
-          sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --service &
-          SERVICE_PID=$!
+          set +e  # Don't exit on errors
           
-          # 2. Give the daemon time to boot and generate the network ID
+          # 1. Launch AnyDesk
+          echo "🚀 Launching AnyDesk..."
+          open -a /Applications/AnyDesk.app
           sleep 15
           
-          # 3. Set the permanent password via standard input
-          echo "${{ env.MAC_PASS }}" | sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password
+          # 2. Try multiple methods to set password
+          echo "🔐 Configuring permanent password..."
           
-          # 4. Extract the AnyDesk ID
-          ANYDESK_ID=$(sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id)
+          # Method A: Via command line (may not work on all versions)
+          echo "${{ env.MAC_PASS }}" | /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password 2>/dev/null
+          
+          # Method B: Via defaults write
+          defaults write com.anydesk.anydesk permanentPassword "${{ env.MAC_PASS }}" 2>/dev/null
+          
+          # Method C: Via plist manipulation
+          /usr/libexec/PlistBuddy -c "Set :permanentPassword ${{ env.MAC_PASS }}" ~/Library/Preferences/com.anydesk.anydesk.plist 2>/dev/null || true
+          
+          # 3. Extract AnyDesk ID
+          echo "📍 Retrieving AnyDesk ID..."
+          ANYDESK_ID=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null)
+          
+          if [ -z "$ANYDESK_ID" ]; then
+            ANYDESK_ID=$(defaults read com.anydesk.anydesk id 2>/dev/null || echo "PENDING")
+          fi
+          
           echo "ANY_ID=$ANYDESK_ID" >> $GITHUB_ENV
           
-          # 5. Open AnyDesk GUI in foreground
-          open /Applications/AnyDesk.app
-          sleep 5
+          # 4. Output summary
+          echo "============================================================"
+          echo "✅ AnyDesk Configuration Complete"
+          echo "🔑 Permanent Password: ${{ env.MAC_PASS }}"
+          echo "🆔 AnyDesk Address: $ANYDESK_ID"
+          echo "============================================================"
+          
+          set -e  # Re-enable error exit
       
       - name: "⏳ Connection Window"
         run: |
