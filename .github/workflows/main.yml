@@ -20,7 +20,7 @@ jobs:
     
     steps:
       # ==========================================
-      # 1. SETUP NGROK
+      # 1. SETUP NGROK (Common)
       # ==========================================
       - name: "🌐 Install & Auth Ngrok"
         shell: bash
@@ -28,17 +28,14 @@ jobs:
           if [ "$RUNNER_OS" == "Windows" ]; then
             curl -L -o ngrok.zip https://bin.equinox.io/c/b34edq6jhPr/ngrok-v3-stable-windows-amd64.zip
             unzip ngrok.zip
-            # Move to a known location for Windows
             mv ngrok.exe /usr/local/bin/ 2>/dev/null || mv ngrok.exe C:/Windows/System32/
           else
             brew install --cask ngrok
           fi
-          
-          # Authenticate using the global command
           ngrok config add-authtoken 3AhMlOU44xocXTENyLvM64XkVNW_5jEpfgSNQs7kBB13WH7FD
 
       # ==========================================
-      # 2. WINDOWS CONFIGURATION (RDP)
+      # 2. WINDOWS CONFIGURATION (RDP - Best Performance)
       # ==========================================
       - name: "🔧 Configure Windows RDP"
         if: github.event.inputs.os_choice == 'Windows'
@@ -48,26 +45,33 @@ jobs:
           $user = "runneradmin"
           net user $user $password
           
+          # Enable RDP and Disable NLA for faster connection
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
           
-          # Start tunnel globally
           Start-Process ngrok -ArgumentList "tcp 3389"
-          Write-Host "✅ Windows RDP Enabled"
+          Write-Host "✅ Windows RDP Ready"
 
       # ==========================================
-      # 3. MACOS CONFIGURATION (VNC)
+      # 3. MACOS CONFIGURATION (VNC + Black Screen Fix)
       # ==========================================
       - name: "🍏 Configure macOS Screen Sharing"
         if: github.event.inputs.os_choice == 'macOS'
         run: |
+          # 1. Create User
           sudo sysadminctl -addUser clouduser -fullName "Cloud User" -password "CloudPC123!" -admin
           
-          sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist com.apple.screensharing -dict Disabled -bool false
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
+          # 2. Force Kickstart Remote Management (Fixes Black Screen)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users clouduser -privs -all -restart -agent
           
-          # Start tunnel globally in background
+          # 3. Set Screen Resolution / Display Buffer
+          sudo defaults write /Library/Preferences/com.apple.windowserver DisplayResolutionEnabled -bool true
+          
+          # 4. Enable VNC Legacy Support
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist VNCPassword -data $(printf "CloudPC123!" | perl -e 'print pack("H*", "131234567890abcdef")')
+          
+          # 5. Start Tunnel
           ngrok tcp 5900 &
           echo "✅ macOS Screen Sharing Enabled"
 
@@ -77,23 +81,24 @@ jobs:
       - name: "🔑 Get Connection Info"
         shell: bash
         run: |
-          echo "🛰️  Wait for Ngrok to initialize..."
+          echo "🛰️  Wait for Ngrok (20s)..."
           sleep 20
           
-          # Query Ngrok API for the public address
           URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
           
           if [ -z "$URL" ] || [ "$URL" == "null" ]; then
-            echo "❌ ERROR: Ngrok failed to provide a URL. Check your Auth Token."
+            echo "❌ ERROR: Ngrok failed. Verify your Auth Token."
             exit 1
           fi
           
           echo "===================================================="
-          echo "✅ CONNECTION ADDRESS: $URL"
-          echo "🔑 PASSWORD: CloudPC123!"
+          echo "✅ ADDRESS: $URL"
+          echo "👤 USER: ${{ github.event.inputs.os_choice == 'Windows' && 'runneradmin' || 'clouduser' }}"
+          echo "🔑 PASS: CloudPC123!"
           echo "===================================================="
           
+          # Keep-alive Heartbeat
           for i in {1..360}; do
-            echo "Keep-alive: Minute $i - Active at $URL"
+            echo "Session Active: Minute $i - URL: $URL"
             sleep 60
           done
