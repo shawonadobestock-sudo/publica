@@ -1,4 +1,5 @@
 name: "Cloud PC Setup (Windows / macOS)"
+
 on:
   workflow_dispatch:
     inputs:
@@ -23,13 +24,9 @@ on:
         required: false
         default: "CloudPC123!"
 
-concurrency:
-  group: cloud-pc-${{ github.ref }}-${{ github.run_id }}
-  cancel-in-progress: false
-
 jobs:
   # ==========================================
-  # WINDOWS JOB (Fully Automated MostLogin)
+  # WINDOWS JOB (Fully Automated CRD)
   # ==========================================
   windows-crd-setup:
     name: "🚀 Windows 2022 CRD Runner"
@@ -45,52 +42,44 @@ jobs:
       - name: "🛑 Verify Inputs"
         run: |
           if ([string]::IsNullOrWhiteSpace($env:RAW_CODE)) {
-            Write-Error "❌ Missing CRD Code!"
+            Write-Error "❌ Missing CRD Code! Please get it from remotedesktop.google.com/headless"
             exit 1
           }
+
       - name: "🔊 Enable Audio"
         run: |
           Set-Service -Name Audiosrv -StartupType Automatic
           Start-Service -Name Audiosrv
+
       - name: "🔧 Install CRD & Virtual Audio"
         run: |
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
           
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
-          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
-          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
-          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
-      - name: "🕵️‍♂️ Silent Install & Launch MostLogin"
+
+      - name: "🕵️‍♂️ Install MostLogin"
         run: |
-          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          $mlInstaller = "$userDownloads\MostLogin-setup.exe"
-          
-          Write-Host "Downloading MostLogin..."
+          $mlInstaller = "$env:USERPROFILE\Downloads\MostLogin-setup.exe"
           Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile $mlInstaller -UseBasicParsing
-          
-          Write-Host "Performing Silent Installation..."
           Start-Process -FilePath $mlInstaller -ArgumentList "/S" -Wait
-          
-          Write-Host "Launching MostLogin..."
-          $mlPath = "C:\Program Files (x86)\MostLogin\MostLogin.exe"
-          if (Test-Path $mlPath) {
-              Start-Process -FilePath $mlPath
-          } else {
-              $altPath = "$env:LocalAppData\Programs\MostLogin\MostLogin.exe"
-              if (Test-Path $altPath) { Start-Process -FilePath $altPath }
-          }
+
       - name: "🌟 Start Chrome Remote Desktop"
         run: |
+          # Use cmd to execute the RAW_CODE directly
           cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
+
       - name: "⏳ Keep Alive"
         run: |
-          Write-Host "✅ Windows PC Ready. MostLogin should be launched!"
-          while ($true) { Start-Sleep -Seconds 300 }
+          Write-Host "✅ Windows PC Ready. Connect via Chrome Remote Desktop."
+          while ($true) { 
+            Write-Host "Heartbeat: $(Get-Date)"
+            Start-Sleep -Seconds 300 
+          }
 
   # ==========================================
-  # MACOS JOB (AnyDesk with Permanent Password)
+  # MACOS JOB (AnyDesk with Fixes)
   # ==========================================
   macos-setup:
     name: "🍏 macOS Remote Runner"
@@ -105,125 +94,53 @@ jobs:
       - name: "🚫 System Prep"
         run: |
           sudo pmset -a sleep 0 displaysleep 0 disksleep 0
-          curl -L -o /Users/runner/wallpaper.jpg "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560"
-          osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
+          # Disable screen lock
+          defaults write com.apple.screensaver idleTime 0
       
-      - name: "🖥️ Install AnyDesk & Tools"
+      - name: "🖥️ Install AnyDesk & MostLogin"
         run: |
-          # Install AnyDesk
           brew install --cask anydesk
-          
-          # Install MostLogin
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
           MOUNT_ML=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
           sudo cp -R "$MOUNT_ML"/*.app /Applications/
           sudo hdiutil detach "$MOUNT_ML" -force
       
-      - name: "🔐 Grant Screen Recording Permission"
-        run: |
-          # Method 1: Reset and grant via tccutil
-          sudo tccutil reset ScreenRecording com.anydesk.anydesk 2>/dev/null || true
-          
-          # Method 2: Grant via defaults
-          defaults write com.apple.screenrecorder allow-permissions -dict com.anydesk.anydesk -bool true
-          
-          # Method 3: Directly modify TCC database (most reliable)
-          TCCDB="/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments/com.apple.LSSharedFileList.RecentApplications.sfl2"
-          if [ -f "$TCCDB" ]; then
-            sudo sqlite3 "$TCCDB" "INSERT OR IGNORE INTO access VALUES ('com.anydesk.anydesk','kTCCServiceScreenCapture',2,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,1592971200);" 2>/dev/null || true
-          fi
-      
-      - name: "🚀 Configure AnyDesk Daemon & Permanent Password"
+      - name: "🚀 Configure AnyDesk"
         run: |
           set +e
+          echo "Setting up AnyDesk..."
           
-          echo "🚀 Launching AnyDesk Application..."
+          # Force set the password in the config file before launching
+          mkdir -p ~/.anydesk
+          echo "ad.security.interactive_access=0" > ~/.anydesk/system.conf
+          echo "ad.security.allow_remote_restart=1" >> ~/.anydesk/system.conf
           
-          # 1. Kill any existing AnyDesk processes
-          sudo pkill -9 AnyDesk 2>/dev/null || true
-          sleep 3
+          # Launch service
+          sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --service &
+          sleep 10
           
-          # 2. Launch AnyDesk using 'open' command (proper macOS way)
-          open -a /Applications/AnyDesk.app --args --service &
-          sleep 30
+          # Set Password (using the command line tool)
+          echo "${{ env.MAC_PASS }}" | sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password
           
-          # 3. Alternative: Use nohup for background daemon
-          sudo nohup /Applications/AnyDesk.app/Contents/MacOS/AnyDesk > /tmp/anydesk.log 2>&1 &
-          sleep 15
+          # Get ID
+          ANY_ID=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id)
+          echo "ANY_ID=$ANY_ID" >> $GITHUB_ENV
           
-          # 4. Check if process is running
-          if pgrep -f "AnyDesk" > /dev/null; then
-            echo "✅ AnyDesk process is running"
-            sleep 10
-          else
-            echo "⚠️  AnyDesk process not detected, attempting restart..."
-            open /Applications/AnyDesk.app
-            sleep 20
-          fi
-          
-          # 5. Try to get ID from AnyDesk
-          echo "📍 Retrieving AnyDesk ID..."
-          
-          # Method 1: Try direct command
-          ANYDESK_ID=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null)
-          
-          # Method 2: If empty or SERVICE_NOT_RUNNING, try with sudo
-          if [ -z "$ANYDESK_ID" ] || [ "$ANYDESK_ID" = "SERVICE_NOT_RUNNING" ]; then
-            ANYDESK_ID=$(sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null)
-          fi
-          
-          # Method 3: Extract from log file
-          if [ -z "$ANYDESK_ID" ] || [ "$ANYDESK_ID" = "SERVICE_NOT_RUNNING" ]; then
-            ANYDESK_ID=$(grep -i "address" /tmp/anydesk.log 2>/dev/null | head -1 | awk '{print $NF}')
-          fi
-          
-          # Method 4: Check preferences file
-          if [ -z "$ANYDESK_ID" ] || [ "$ANYDESK_ID" = "SERVICE_NOT_RUNNING" ]; then
-            ANYDESK_ID=$(defaults read com.anydesk.anydesk id 2>/dev/null || echo "ID_RETRIEVAL_PENDING")
-          fi
-          
-          # Fallback
-          if [ -z "$ANYDESK_ID" ] || [ "$ANYDESK_ID" = "SERVICE_NOT_RUNNING" ]; then
-            ANYDESK_ID="RETRIEVING_ON_CONNECT"
-          fi
-          
-          echo "ANY_ID=$ANYDESK_ID" >> $GITHUB_ENV
-          
-          # 6. Configure password via multiple methods
-          echo "🔐 Configuring permanent password..."
-          
-          # Method A: Via defaults (macOS native)
-          defaults write com.anydesk.anydesk password "${{ env.MAC_PASS }}" 2>/dev/null || true
-          
-          # Method B: Via keychain
-          security delete-generic-password -a anydesk -s anydesk 2>/dev/null || true
-          security add-generic-password -a anydesk -s anydesk -w "${{ env.MAC_PASS }}" 2>/dev/null || true
-          
-          # Method C: Create config plist
-          mkdir -p ~/Library/Preferences
-          defaults write ~/Library/Preferences/com.anydesk.anydesk password "${{ env.MAC_PASS }}"
-          defaults write ~/Library/Preferences/com.anydesk.anydesk acceptPassword -bool true
-          
-          echo "============================================================"
-          echo "✅ AnyDesk Configuration Complete"
-          echo "🔑 Permanent Password: ${{ env.MAC_PASS }}"
-          echo "🆔 AnyDesk Address: $ANYDESK_ID"
-          echo "============================================================"
-          
-          # Display logs for debugging
-          if [ -f /tmp/anydesk.log ]; then
-            echo ""
-            echo "📋 AnyDesk Log Output (last 20 lines):"
-            tail -20 /tmp/anydesk.log
-          fi
-          
-          set -e
-      
-      - name: "⏳ Connection Window"
+          echo "========================================"
+          echo "ID: $ANY_ID"
+          echo "PASS: ${{ env.MAC_PASS }}"
+          echo "========================================"
+
+      - name: "⏳ Keep Alive & Heartbeat"
         run: |
-          echo "============================================================"
-          echo "✅ ANYDESK IS CONFIGURED AND RUNNING"
-          echo "🔑 Permanent Password: ${{ env.MAC_PASS }}"
-          echo "🆔 AnyDesk Address: ${{ env.ANY_ID }}"
-          echo "============================================================"
-          while true; do sleep 3600; done
+          echo "✅ Runner active. Connect to: ${{ env.ANY_ID }}"
+          # Prevent runner timeout by printing every 60s
+          for i in {1..360}; do
+            echo "Session active... Minute $i/360"
+            # Ensure AnyDesk service stays alive
+            if ! pgrep -f AnyDesk > /dev/null; then
+               echo "Re-launching AnyDesk..."
+               sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --service &
+            fi
+            sleep 60
+          done
