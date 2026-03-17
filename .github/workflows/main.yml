@@ -20,7 +20,7 @@ jobs:
     
     steps:
       # ==========================================
-      # 1. SETUP NGROK (Common)
+      # 1. SETUP NGROK
       # ==========================================
       - name: "🌐 Install & Auth Ngrok"
         shell: bash
@@ -35,7 +35,7 @@ jobs:
           ngrok config add-authtoken 3AhMlOU44xocXTENyLvM64XkVNW_5jEpfgSNQs7kBB13WH7FD
 
       # ==========================================
-      # 2. WINDOWS CONFIGURATION (RDP - Best Performance)
+      # 2. WINDOWS CONFIGURATION (RDP)
       # ==========================================
       - name: "🔧 Configure Windows RDP"
         if: github.event.inputs.os_choice == 'Windows'
@@ -44,17 +44,14 @@ jobs:
           $password = "CloudPC123!"
           $user = "runneradmin"
           net user $user $password
-          
-          # Enable RDP and Disable NLA for faster connection
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-          
           Start-Process ngrok -ArgumentList "tcp 3389"
           Write-Host "✅ Windows RDP Ready"
 
       # ==========================================
-      # 3. MACOS CONFIGURATION (VNC + Black Screen Fix)
+      # 3. MACOS CONFIGURATION (FIXED VNC)
       # ==========================================
       - name: "🍏 Configure macOS Screen Sharing"
         if: github.event.inputs.os_choice == 'macOS'
@@ -62,16 +59,13 @@ jobs:
           # 1. Create User
           sudo sysadminctl -addUser clouduser -fullName "Cloud User" -password "CloudPC123!" -admin
           
-          # 2. Force Kickstart Remote Management (Fixes Black Screen)
+          # 2. Enable Remote Management (ARDAgent)
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users clouduser -privs -all -restart -agent
           
-          # 3. Set Screen Resolution / Display Buffer
-          sudo defaults write /Library/Preferences/com.apple.windowserver DisplayResolutionEnabled -bool true
+          # 3. Fix: Set VNC Password correctly (Avoids the previous error)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvncpasswd -vncpasswd CloudPC123!
           
-          # 4. Enable VNC Legacy Support
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist VNCPassword -data $(printf "CloudPC123!" | perl -e 'print pack("H*", "131234567890abcdef")')
-          
-          # 5. Start Tunnel
+          # 4. Start Tunnel
           ngrok tcp 5900 &
           echo "✅ macOS Screen Sharing Enabled"
 
@@ -83,11 +77,10 @@ jobs:
         run: |
           echo "🛰️  Wait for Ngrok (20s)..."
           sleep 20
-          
           URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
           
           if [ -z "$URL" ] || [ "$URL" == "null" ]; then
-            echo "❌ ERROR: Ngrok failed. Verify your Auth Token."
+            echo "❌ ERROR: Ngrok failed. Check logs above."
             exit 1
           fi
           
@@ -97,7 +90,6 @@ jobs:
           echo "🔑 PASS: CloudPC123!"
           echo "===================================================="
           
-          # Keep-alive Heartbeat
           for i in {1..360}; do
             echo "Session Active: Minute $i - URL: $URL"
             sleep 60
