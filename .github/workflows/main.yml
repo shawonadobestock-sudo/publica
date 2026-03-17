@@ -1,4 +1,4 @@
-name: "macOS RustDesk - OCR ID & Password"
+name: "macOS RustDesk - Continuous OCR"
 
 on:
   workflow_dispatch:
@@ -10,11 +10,11 @@ on:
 
 jobs:
   rustdesk:
-    name: "🦀 Pure RustDesk with OCR"
+    name: "🦀 OCR Monitoring"
     runs-on: macos-15
 
     steps:
-      - name: "🦀 Install RustDesk & OCR Tools"
+      - name: "🦀 Install Tools"
         run: |
           brew install --cask rustdesk
           brew install tesseract
@@ -24,10 +24,7 @@ jobs:
         run: |
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           RUSTDESK="com.carriez.rustdesk"
-          SQL_QUERY="
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);
-          "
+          SQL_QUERY="INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0); INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);"
           sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
           sudo killall -9 tccd || true
 
@@ -36,61 +33,66 @@ jobs:
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
           open "$RUSTDESK_APP"
           "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          sleep 20 # Wait for ID to generate
+          echo "✅ RustDesk started"
 
-      - name: "🔍 Capture & OCR Credentials"
-        id: ocr_step
+      - name: "🔄 Connection Loop with Continuous OCR"
         run: |
-          # 1. Take the screenshot
-          screencapture -x /tmp/screen.png
-          
-          # 2. Use Tesseract to read the text
-          # We tell Tesseract to look specifically for digits/text
-          tesseract /tmp/screen.png /tmp/output
-          
-          echo "--- RAW OCR DATA ---"
-          cat /tmp/output.txt
-          echo "--------------------"
+          # Define the OCR and Screenshot function
+          capture_and_ocr() {
+            echo "📸 Capturing screen..."
+            # Use absolute paths and ensure the directory exists
+            local IMG_PATH="/tmp/rust_screen.png"
+            local OUT_PATH="/tmp/ocr_results"
+            
+            # Take screenshot
+            screencapture -x "$IMG_PATH"
+            sleep 2 # Small buffer to ensure file is written
+            
+            if [ ! -f "$IMG_PATH" ]; then
+              echo "❌ Error: Screenshot file not found!"
+              return
+            fi
 
-          # 3. Extract ID (looking for 9-10 digit numbers with spaces)
-          RD_ID=$(grep -E -o '[0-9 ]{9,12}' /tmp/output.txt | tr -d ' ' | head -n 1)
-          
-          # 4. Extract One-time Password (looking for the string after 'password')
-          RD_OTP=$(grep -A 1 "password" /tmp/output.txt | tail -n 1 | tr -d ' ')
+            # Perform OCR
+            tesseract "$IMG_PATH" "$OUT_PATH" -l eng
+            
+            # Extract ID and OTP
+            # RustDesk IDs are usually 9-10 digits with spaces
+            local RAW_ID=$(grep -E -o '[0-9 ]{9,12}' "${OUT_PATH}.txt" | tr -d ' ' | head -n 1)
+            # Find the word 'password' and take the next non-empty line
+            local RAW_OTP=$(grep -A 2 -i "password" "${OUT_PATH}.txt" | tail -n 1 | xargs)
 
-          echo "DETECTED_ID=$RD_ID" >> $GITHUB_ENV
-          echo "DETECTED_OTP=$RD_OTP" >> $GITHUB_ENV
+            # Upload to Cloud
+            local URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@$IMG_PATH" https://catbox.moe/user/api.php)
 
-      - name: "🌐 Upload & Log Results"
-        run: |
-          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/screen.png" https://catbox.moe/user/api.php)
-          
-          echo "🚀 STATUS: READY TO CONNECT"
-          echo "------------------------------------------------------"
-          echo "🆔 RUSTDESK ID: ${{ env.DETECTED_ID }}"
-          echo "🔑 FIXED PW:    ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "🎲 ONE-TIME PW: ${{ env.DETECTED_OTP }}"
-          echo "📸 SCREENSHOT:  $IMAGE_URL"
-          echo "------------------------------------------------------"
+            echo "------------------------------------------------------"
+            echo "⏰ UPDATE: $(date)"
+            echo "🆔 DETECTED ID: $RAW_ID"
+            echo "🎲 ONE-TIME PW: $RAW_OTP"
+            echo "🔗 SCREENSHOT:  $URL"
+            echo "------------------------------------------------------"
+          }
 
-      - name: "🔄 Monitor Loop"
-        run: |
+          echo "⏳ Initializing first capture in 25s..."
+          sleep 25
+          capture_and_ocr
+
           PREVIOUS_STATE="off"
           while true; do
+            # Monitor network for RustDesk connection
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
+
             if [ "$CONN_COUNT" -gt 0 ]; then
-                PREVIOUS_STATE="on"
+                if [ "$PREVIOUS_STATE" == "off" ]; then
+                    echo "🌐 User connected."
+                    PREVIOUS_STATE="on"
+                fi
             else
                 if [ "$PREVIOUS_STATE" == "on" ]; then
-                    echo "⚠️ Disconnected. Refreshing..."
-                    open -a "RustDesk"
+                    echo "⚠️ Disconnected! Refreshing credentials..."
+                    open -a "RustDesk" # Bring to front
                     sleep 5
-                    screencapture -x /tmp/screen.png
-                    # Re-run OCR if you want the NEW one-time password
-                    tesseract /tmp/screen.png /tmp/output
-                    NEW_ID=$(grep -E -o '[0-9 ]{9,12}' /tmp/output.txt | tr -d ' ' | head -n 1)
-                    NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/screen.png" https://catbox.moe/user/api.php)
-                    echo "NEW ID: $NEW_ID | NEW URL: $NEW_URL"
+                    capture_and_ocr
                     PREVIOUS_STATE="off"
                 fi
             fi
