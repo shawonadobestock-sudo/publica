@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   # ==========================================
-  # WINDOWS JOB (Fully Automated MostLogin)
+  # WINDOWS JOB
   # ==========================================
   windows-crd-setup:
     name: "🚀 Windows 2022 CRD Runner"
@@ -52,7 +52,6 @@ jobs:
         run: |
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
-          
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
           Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
           Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
@@ -62,31 +61,17 @@ jobs:
         run: |
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           $mlInstaller = "$userDownloads\MostLogin-setup.exe"
-          
-          Write-Host "Downloading MostLogin..."
           Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile $mlInstaller -UseBasicParsing
-          
-          Write-Host "Performing Silent Installation..."
           Start-Process -FilePath $mlInstaller -ArgumentList "/S" -Wait
-          
-          Write-Host "Launching MostLogin..."
           $mlPath = "C:\Program Files (x86)\MostLogin\MostLogin.exe"
-          if (Test-Path $mlPath) {
-              Start-Process -FilePath $mlPath
-          } else {
-              $altPath = "$env:LocalAppData\Programs\MostLogin\MostLogin.exe"
-              if (Test-Path $altPath) { Start-Process -FilePath $altPath }
-          }
+          if (Test-Path $mlPath) { Start-Process -FilePath $mlPath }
       - name: "🌟 Start Chrome Remote Desktop"
-        run: |
-          cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
+        run: cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
       - name: "⏳ Keep Alive"
-        run: |
-          Write-Host "✅ Windows PC Ready. MostLogin should be launched!"
-          while ($true) { Start-Sleep -Seconds 300 }
+        run: while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (macOS 14 + High Frequency Logs)
+  # MACOS JOB (Auto-Reopen & Conditional Capture)
   # ==========================================
   macos-setup:
     name: "🍏 macOS Remote Runner (macOS 14)"
@@ -96,59 +81,55 @@ jobs:
       - name: "🔓 Create Admin"
         run: sudo sysadminctl -addUser macadmin -fullName "Mac Admin" -password "CloudPC123!" -admin
 
-      - name: "🚫 System Prep"
-        run: |
-          sudo pmset -a sleep 0 displaysleep 0 disksleep 0
-          curl -L -o /Users/runner/wallpaper.jpg "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560"
-          osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
-
-      - name: "🖥️ Install Remote Tools & MostLogin"
+      - name: "🖥️ Install Remote Tools"
         run: |
           brew install --cask --no-quarantine rustdesk
-          
-          # Install MostLogin
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
           MOUNT_ML=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
           sudo cp -R "$MOUNT_ML"/*.app /Applications/
           sudo hdiutil detach "$MOUNT_ML" -force
-          
-          # Launch RustDesk to generate config files
           open /Applications/RustDesk.app
           sleep 15
 
-      - name: "📊 Live Monitoring Loop (1s Logs / 5s Images)"
+      - name: "📊 Smart Monitoring Loop"
         run: |
-          echo "🚀 Starting Automated Monitoring..."
+          echo "🚀 Monitoring Connection State..."
           
-          # LOOP 1: Log ID and PW every 1 second
+          # LOOP 1: Log ID/PW every 1s
           (
             while true; do
-              # Find the config file dynamically
-              CONFIG_PATH=$(ls ~/Library/Application\ Support/RustDesk/config/*.toml 2>/dev/null | head -n 1)
-              if [ -n "$CONFIG_PATH" ] && [ -f "$CONFIG_PATH" ]; then
-                ID=$(grep 'id =' "$CONFIG_PATH" | cut -d"'" -f2)
-                PW=$(grep 'password =' "$CONFIG_PATH" | cut -d"'" -f2)
+              CONFIG=$(ls ~/Library/Application\ Support/RustDesk/config/*.toml 2>/dev/null | head -n 1)
+              if [ -f "$CONFIG" ]; then
+                ID=$(grep 'id =' "$CONFIG" | cut -d"'" -f2)
+                PW=$(grep 'password =' "$CONFIG" | cut -d"'" -f2)
                 echo "[$(date +%T)] 🔑 ID: $ID | 🔒 PW: $PW"
-              else
-                echo "[$(date +%T)] ⏳ Waiting for RustDesk to initialize..."
               fi
               sleep 1
             done
           ) &
 
-          # LOOP 2: Upload GUI Screenshot to Catbox every 5 seconds
+          # LOOP 2: Auto-Open & Screenshot on Disconnect
           (
             while true; do
-              screencapture -x /tmp/live-view.png
-              if [ -f /tmp/live-view.png ]; then
-                IMG_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/live-view.png" https://catbox.moe/user/api.php)
-                echo "[$(date +%T)] 📸 Screenshot: $IMG_URL"
+              # Check if anyone is connected to RustDesk (Default port 21116/21117 or established TCP)
+              # Note: Checking for established TCP connections on common RustDesk ports
+              CONNECTION_CHECK=$(netstat -an | grep ESTABLISHED | grep -E "\.2111[6-9]|\.443")
+              
+              if [ -z "$CONNECTION_CHECK" ]; then
+                echo "[$(date +%T)] ⭕ Disconnected. Opening GUI & Capturing..."
+                
+                # Bring RustDesk to front
+                open /Applications/RustDesk.app
+                
+                # Capture and Upload
+                screencapture -x /tmp/status.png
+                URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/status.png" https://catbox.moe/user/api.php)
+                echo "[$(date +%T)] 📸 Re-connect here: $URL"
+              else
+                echo "[$(date +%T)] 🟢 User Connected. Pausing screenshots."
               fi
               sleep 5
             done
           ) &
 
-          # Keep-alive loop to prevent job from finishing
-          while true; do
-            sleep 60
-          done
+          while true; do sleep 60; done
