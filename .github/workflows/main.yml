@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   # ==========================================
-  # WINDOWS JOB
+  # WINDOWS JOB (Fully Automated MostLogin)
   # ==========================================
   windows-crd-setup:
     name: "🚀 Windows 2022 CRD Runner"
@@ -44,82 +44,94 @@ jobs:
             Write-Error "❌ Missing CRD Code!"
             exit 1
           }
+      - name: "🔊 Enable Audio"
+        run: |
+          Set-Service -Name Audiosrv -StartupType Automatic
+          Start-Service -Name Audiosrv
       - name: "🔧 Install CRD & Virtual Audio"
         run: |
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
+          
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
+          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
+          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
+          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
+      - name: "🕵️‍♂️ Silent Install & Launch MostLogin"
+        run: |
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          $mlInstaller = "$userDownloads\MostLogin-setup.exe"
+          
+          Write-Host "Downloading MostLogin..."
+          Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile $mlInstaller -UseBasicParsing
+          
+          Write-Host "Performing Silent Installation..."
+          Start-Process -FilePath $mlInstaller -ArgumentList "/S" -Wait
+          
+          Write-Host "Launching MostLogin..."
+          $mlPath = "C:\Program Files (x86)\MostLogin\MostLogin.exe"
+          if (Test-Path $mlPath) {
+              Start-Process -FilePath $mlPath
+          } else {
+              $altPath = "$env:LocalAppData\Programs\MostLogin\MostLogin.exe"
+              if (Test-Path $altPath) { Start-Process -FilePath $altPath }
+          }
       - name: "🌟 Start Chrome Remote Desktop"
-        run: cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
+        run: |
+          cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
       - name: "⏳ Keep Alive"
-        run: while ($true) { Start-Sleep -Seconds 300 }
+        run: |
+          Write-Host "✅ Windows PC Ready. MostLogin should be launched!"
+          while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (Fixed Initial Screenshot & Monitoring)
+  # MACOS JOB (macOS 14 + 20s Update Loop)
   # ==========================================
   macos-setup:
-    name: "🍏 macOS Remote Runner (macOS 14)"
+    name: "🍏 macOS Remote Runner"
     if: github.event.inputs.os_choice == 'macOS'
     runs-on: macos-14
     steps:
       - name: "🔓 Create Admin"
         run: sudo sysadminctl -addUser macadmin -fullName "Mac Admin" -password "CloudPC123!" -admin
-
+      - name: "🚫 System Prep"
+        run: |
+          sudo pmset -a sleep 0 displaysleep 0 disksleep 0
+          curl -L -o /Users/runner/wallpaper.jpg "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560"
+          osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
       - name: "🖥️ Install Remote Tools"
         run: |
           brew install --cask --no-quarantine rustdesk
-          # Install MostLogin
+          curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
+          sudo hdiutil attach /tmp/crd.dmg -nobrowse
+          sudo installer -pkg $(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg") -target /
+          sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
+      - name: "🕵️‍♂️ Install Browsers"
+        run: |
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
           MOUNT_ML=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
           sudo cp -R "$MOUNT_ML"/*.app /Applications/
           sudo hdiutil detach "$MOUNT_ML" -force
-          # Start RustDesk and wait for config generation
+      - name: "🚀 Launch RustDesk"
+        run: |
           open /Applications/RustDesk.app
           sleep 15
-
-      - name: "📊 Smart Monitoring Loop"
+      - name: "🔄 Live ID/Password Feed (20s Loop)"
         run: |
-          echo "🚀 Starting High-Frequency Monitoring..."
+          echo "### 🍏 macOS Live Access Feed" >> $GITHUB_STEP_SUMMARY
+          echo "New screenshots will be posted to the job logs every 20 seconds." >> $GITHUB_STEP_SUMMARY
           
-          # LOOP 1: Log ID/PW every 1s
-          (
-            while true; do
-              CONFIG=$(ls ~/Library/Application\ Support/RustDesk/config/*.toml 2>/dev/null | head -n 1)
-              if [ -f "$CONFIG" ]; then
-                ID=$(grep 'id =' "$CONFIG" | cut -d"'" -f2)
-                PW=$(grep 'password =' "$CONFIG" | cut -d"'" -f2)
-                echo "[$(date +%T)] 🔑 ID: $ID | 🔒 PW: $PW"
-              fi
-              sleep 1
-            done
-          ) &
-
-          # LOOP 2: Immediate Screenshot + Smart Re-capture on Disconnect
-          (
-            # --- MANDATORY INITIAL UPLOAD ---
-            echo "[$(date +%T)] 📸 Capturing FIRST screen..."
-            screencapture -x /tmp/initial.png
-            FIRST_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/initial.png" https://catbox.moe/user/api.php)
-            echo "[$(date +%T)] 🚀 INITIAL LINK: $FIRST_URL"
-
-            while true; do
-              # Specifically check for established sessions on RustDesk relay/direct ports (21116-21119)
-              # This avoids false positives from system telemetry
-              CONNECTION_CHECK=$(netstat -an | grep ESTABLISHED | grep -E "\.2111[7-9]")
-              
-              if [ -z "$CONNECTION_CHECK" ]; then
-                # No active user found -> Force GUI to front and capture
-                open /Applications/RustDesk.app
-                screencapture -x /tmp/loop.png
-                URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/loop.png" https://catbox.moe/user/api.php)
-                echo "[$(date +%T)] 📸 Disconnected - View GUI: $URL"
-              else
-                # Connection detected -> Be quiet to save log space
-                echo "[$(date +%T)] 🟢 User Connected. Standing by..."
-              fi
-              sleep 5
-            done
-          ) &
-
-          # Prevent job timeout
-          while true; do sleep 60; done
+          while true; do
+            # Capture the current screen
+            screencapture -x /tmp/rustdesk-live.png
+            
+            # Upload to Catbox API
+            LIVE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-live.png" https://catbox.moe/user/api.php)
+            
+            # Print the timestamp and the URL to the GitHub logs
+            echo "[$(date +'%H:%M:%S')] 📸 Live Screenshot: $LIVE_URL"
+            
+            # Wait 20 seconds before repeating
+            sleep 20
+          done
