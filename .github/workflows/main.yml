@@ -90,7 +90,7 @@ jobs:
           while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (AnyDesk Permanent Password)
+  # MACOS JOB (AnyDesk with Permanent Password)
   # ==========================================
   macos-setup:
     name: "🍏 macOS Remote Runner"
@@ -137,72 +137,85 @@ jobs:
         run: |
           set +e
           
-          echo "🚀 Starting AnyDesk Daemon..."
+          echo "🚀 Launching AnyDesk Application..."
           
-          # 1. Start AnyDesk daemon with elevated privileges
-          sudo launchctl load /Library/LaunchDaemons/com.anydesk.anydeskd.plist 2>/dev/null || {
-            echo "Starting AnyDesk manually..."
-            sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk &
-          }
+          # 1. Kill any existing AnyDesk processes
+          sudo pkill -9 AnyDesk 2>/dev/null || true
+          sleep 3
           
-          sleep 25
+          # 2. Launch AnyDesk using 'open' command (proper macOS way)
+          open -a /Applications/AnyDesk.app --args --service &
+          sleep 30
           
-          # 2. Verify daemon is responsive
-          echo "⏳ Waiting for daemon initialization..."
-          max_attempts=15
-          for i in $(seq 1 $max_attempts); do
-            ANYDESK_ID=$(sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null)
-            if [ ! -z "$ANYDESK_ID" ]; then
-              echo "✅ AnyDesk daemon responsive - ID: $ANYDESK_ID"
-              break
-            fi
-            sleep 2
-          done
+          # 3. Alternative: Use nohup for background daemon
+          sudo nohup /Applications/AnyDesk.app/Contents/MacOS/AnyDesk > /tmp/anydesk.log 2>&1 &
+          sleep 15
           
-          # 3. Configure permanent password via multiple methods
-          echo "🔐 Configuring permanent password..."
+          # 4. Check if process is running
+          if pgrep -f "AnyDesk" > /dev/null; then
+            echo "✅ AnyDesk process is running"
+            sleep 10
+          else
+            echo "⚠️  AnyDesk process not detected, attempting restart..."
+            open /Applications/AnyDesk.app
+            sleep 20
+          fi
           
-          # Method 1: Store password in macOS keychain
-          sudo security add-generic-password -a "anydesk_admin" -s "anydesk_password" \
-            -w "${{ env.MAC_PASS }}" -U 2>/dev/null || \
-          sudo security update-generic-password -a "anydesk_admin" -s "anydesk_password" \
-            -w "${{ env.MAC_PASS }}" 2>/dev/null || true
-          
-          # Method 2: Export password environment variable
-          export ANYDESK_PASSWORD="${{ env.MAC_PASS }}"
-          
-          # Method 3: Configure via preferences file
-          sudo bash -c "cat > /Library/Preferences/com.anydesk.anydesk.plist << 'CONFEOF'
-          <?xml version=\"1.0\" encoding=\"UTF-8\"?>
-          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
-          <plist version=\"1.0\">
-          <dict>
-              <key>password</key>
-              <string>${{ env.MAC_PASS }}</string>
-              <key>acceptPassword</key>
-              <true/>
-          </dict>
-          </plist>
-          CONFEOF"
-          
-          # 4. Get final AnyDesk ID
+          # 5. Try to get ID from AnyDesk
           echo "📍 Retrieving AnyDesk ID..."
-          ANYDESK_ID=$(sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null || echo "PENDING")
+          
+          # Method 1: Try direct command
+          ANYDESK_ID=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null)
+          
+          # Method 2: If empty or SERVICE_NOT_RUNNING, try with sudo
+          if [ -z "$ANYDESK_ID" ] || [ "$ANYDESK_ID" = "SERVICE_NOT_RUNNING" ]; then
+            ANYDESK_ID=$(sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null)
+          fi
+          
+          # Method 3: Extract from log file
+          if [ -z "$ANYDESK_ID" ] || [ "$ANYDESK_ID" = "SERVICE_NOT_RUNNING" ]; then
+            ANYDESK_ID=$(grep -i "address" /tmp/anydesk.log 2>/dev/null | head -1 | awk '{print $NF}')
+          fi
+          
+          # Method 4: Check preferences file
+          if [ -z "$ANYDESK_ID" ] || [ "$ANYDESK_ID" = "SERVICE_NOT_RUNNING" ]; then
+            ANYDESK_ID=$(defaults read com.anydesk.anydesk id 2>/dev/null || echo "ID_RETRIEVAL_PENDING")
+          fi
+          
+          # Fallback
+          if [ -z "$ANYDESK_ID" ] || [ "$ANYDESK_ID" = "SERVICE_NOT_RUNNING" ]; then
+            ANYDESK_ID="RETRIEVING_ON_CONNECT"
+          fi
           
           echo "ANY_ID=$ANYDESK_ID" >> $GITHUB_ENV
           
-          # 5. Ensure daemon is running
-          if ! pgrep -f "AnyDesk" > /dev/null; then
-            echo "🔄 Starting AnyDesk daemon..."
-            sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk &
-            sleep 10
-          fi
+          # 6. Configure password via multiple methods
+          echo "🔐 Configuring permanent password..."
+          
+          # Method A: Via defaults (macOS native)
+          defaults write com.anydesk.anydesk password "${{ env.MAC_PASS }}" 2>/dev/null || true
+          
+          # Method B: Via keychain
+          security delete-generic-password -a anydesk -s anydesk 2>/dev/null || true
+          security add-generic-password -a anydesk -s anydesk -w "${{ env.MAC_PASS }}" 2>/dev/null || true
+          
+          # Method C: Create config plist
+          mkdir -p ~/Library/Preferences
+          defaults write ~/Library/Preferences/com.anydesk.anydesk password "${{ env.MAC_PASS }}"
+          defaults write ~/Library/Preferences/com.anydesk.anydesk acceptPassword -bool true
           
           echo "============================================================"
           echo "✅ AnyDesk Configuration Complete"
-          echo "🔑 Permanent Password Configured: YES"
+          echo "🔑 Permanent Password: ${{ env.MAC_PASS }}"
           echo "🆔 AnyDesk Address: $ANYDESK_ID"
           echo "============================================================"
+          
+          # Display logs for debugging
+          if [ -f /tmp/anydesk.log ]; then
+            echo ""
+            echo "📋 AnyDesk Log Output (last 20 lines):"
+            tail -20 /tmp/anydesk.log
+          fi
           
           set -e
       
