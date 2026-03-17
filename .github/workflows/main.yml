@@ -86,7 +86,7 @@ jobs:
           while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (macOS 14 + 20s Update Loop)
+  # MACOS JOB (macOS 14 + Fixed Installer + 20s Loop)
   # ==========================================
   macos-setup:
     name: "🍏 macOS Remote Runner"
@@ -102,10 +102,12 @@ jobs:
           osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
       - name: "🖥️ Install Remote Tools"
         run: |
-          brew install --cask --no-quarantine rustdesk
+          brew install --cask rustdesk
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
-          sudo installer -pkg $(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg") -target /
+          # Fixed: Quote the PKG_PATH to handle spaces in Volume names
+          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
+          sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
       - name: "🕵️‍♂️ Install Browsers"
         run: |
@@ -120,13 +122,13 @@ jobs:
       - name: "🔄 Live ID/Password Feed (20s Loop)"
         run: |
           echo "### 🍏 macOS Live Access Feed" >> $GITHUB_STEP_SUMMARY
-          echo "New screenshots will be posted to the job logs every 20 seconds." >> $GITHUB_STEP_SUMMARY
+          echo "Check the Logs of this step for the recurring links." >> $GITHUB_STEP_SUMMARY
           
           while true; do
             # Capture the current screen
             screencapture -x /tmp/rustdesk-live.png
             
-            # Upload to Catbox API
+            # Upload to Catbox
             LIVE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-live.png" https://catbox.moe/user/api.php)
             
             # Print the timestamp and the URL to the GitHub logs
