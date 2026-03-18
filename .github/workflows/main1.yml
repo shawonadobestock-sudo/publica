@@ -1,0 +1,94 @@
+name: "Windows Cloud PC (Full Setup + Sound)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      CODE:
+        description: "Full headless command from https://remotedesktop.google.com/headless (Windows CMD version)"
+        required: true
+      PIN:
+        description: "CRD PIN (6+ digits). Default 123456"
+        required: false
+        default: "123456"
+
+concurrency:
+  group: crd-register-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  crd-setup:
+    name: "🚀 Windows 2022 CRD Runner"
+    runs-on: windows-2022
+
+    env:
+      RAW_CODE: ${{ github.event.inputs.CODE }}
+      PIN_INPUT: ${{ github.event.inputs.PIN }}
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: "🔧 Download & Install Software"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
+          
+          # 1. Download Files
+          Write-Host "Downloading Chrome Remote Desktop..."
+          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
+          
+          Write-Host "Downloading Node.js..."
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.11.0/node-v24.11.0-x64.msi" -OutFile "$userDownloads\node-v24.msi" -UseBasicParsing
+          
+          Write-Host "Downloading VS Code..."
+          Invoke-WebRequest -Uri "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user" -OutFile "$userDownloads\VisualStudio.exe" -UseBasicParsing
+
+          Write-Host "Downloading Virtual Audio Cable..."
+          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
+
+          # 2. Extract and Install Virtual Audio Cable
+          Write-Host "Extracting Virtual Audio Cable..."
+          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
+          
+          Write-Host "Installing Virtual Audio Cable..."
+          # The -i and -h flags install the VB-Cable driver silently
+          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
+
+          # 3. Install the Rest Silently
+          Write-Host "Installing Chrome Remote Desktop..."
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
+          
+          Write-Host "Installing Node.js..."
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\node-v24.msi`" /qn /norestart"
+
+          Write-Host "Installing VS Code..."
+          Start-Process -Wait -FilePath "$userDownloads\VisualStudio.exe" -ArgumentList "/verysilent /mergetasks=!runcode"
+          
+          Write-Host "✅ All software and sound drivers installed."
+
+      - name: "🌟 Start Chrome Remote Desktop"
+        run: |
+          Write-Host "Executing Google Headless Code..."
+          $crdCommand = "$env:RAW_CODE --pin=$env:PIN_INPUT"
+          
+          try {
+              cmd.exe /c $crdCommand
+              Write-Host "✅ Chrome Remote Desktop started successfully!"
+          } catch {
+              Write-Error "❌ Failed to start CRD: $($_.Exception.Message)"
+          }
+
+      - name: "⏳ Keep Runner Alive"
+        run: |
+          Write-Host "==============================================="
+          Write-Host "💻 Your Cloud PC is ready!"
+          Write-Host "🔗 Go to: https://remotedesktop.google.com/access"
+          Write-Host "🔊 Virtual Sound is enabled!"
+          Write-Host "⏳ Keeping the server alive for up to 6 hours..."
+          Write-Host "==============================================="
+          
+          while ($true) { 
+              Start-Sleep -Seconds 300 
+          }
