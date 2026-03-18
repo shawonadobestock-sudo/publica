@@ -1,13 +1,23 @@
-name: "Windows Cloud PC (Full Setup + Sound)"
+name: "Windows Cloud PC (Multi-OS + Sound)"
 
 on:
   workflow_dispatch:
     inputs:
+      OS_VERSION:
+        description: "Select Windows Version"
+        type: choice
+        required: true
+        default: "windows-latest"
+        options:
+          - "windows-latest"
+          - "windows-2025"
+          - "windows-2022"
+          - "windows-2025-vs2026"
       CODE:
-        description: "Full headless command from https://remotedesktop.google.com/headless (Windows CMD version)"
+        description: "Full headless command from Google Remote Desktop"
         required: true
       PIN:
-        description: "CRD PIN (6+ digits). Default 123456"
+        description: "CRD PIN (6+ digits)"
         required: false
         default: "123456"
 
@@ -17,8 +27,9 @@ concurrency:
 
 jobs:
   crd-setup:
-    name: "🚀 Windows 2022 CRD Runner"
-    runs-on: windows-2022
+    name: "🚀 RDP Runner"
+    # This line now uses your dropdown choice!
+    runs-on: ${{ github.event.inputs.OS_VERSION }}
 
     env:
       RAW_CODE: ${{ github.event.inputs.CODE }}
@@ -35,7 +46,6 @@ jobs:
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
           
-          # 1. Download Files
           Write-Host "Downloading Chrome Remote Desktop..."
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
           
@@ -48,31 +58,35 @@ jobs:
           Write-Host "Downloading Virtual Audio Cable..."
           Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
 
-          # 2. Extract and Install Virtual Audio Cable
-          Write-Host "Extracting Virtual Audio Cable..."
+          Write-Host "Extracting and Installing Drivers..."
           Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
-          
-          Write-Host "Installing Virtual Audio Cable..."
-          # The -i and -h flags install the VB-Cable driver silently
           Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
 
-          # 3. Install the Rest Silently
-          Write-Host "Installing Chrome Remote Desktop..."
+          Write-Host "Silent Installation of Apps..."
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
-          
-          Write-Host "Installing Node.js..."
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\node-v24.msi`" /qn /norestart"
-
-          Write-Host "Installing VS Code..."
           Start-Process -Wait -FilePath "$userDownloads\VisualStudio.exe" -ArgumentList "/verysilent /mergetasks=!runcode"
           
-          Write-Host "✅ All software and sound drivers installed."
+          Write-Host "✅ Software and Drivers installed."
+
+      - name: "🔊 Enable & Initialize Windows Audio"
+        run: |
+          Write-Host "Starting Audio Services..."
+          Set-Service -Name "Audiosrv" -StartupType Automatic
+          Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
+          Start-Service "Audiosrv" -ErrorAction SilentlyContinue
+          Start-Service "AudioEndpointBuilder" -ErrorAction SilentlyContinue
+
+          Write-Host "Applying Registry tweaks for Sound..."
+          reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v "fDisableAudioCapture" /t REG_DWORD /d 0 /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v "fForceAudioRedirection" /t REG_DWORD /d 1 /f
+          
+          Write-Host "✅ Audio services initialized."
 
       - name: "🌟 Start Chrome Remote Desktop"
         run: |
           Write-Host "Executing Google Headless Code..."
           $crdCommand = "$env:RAW_CODE --pin=$env:PIN_INPUT"
-          
           try {
               cmd.exe /c $crdCommand
               Write-Host "✅ Chrome Remote Desktop started successfully!"
@@ -83,12 +97,8 @@ jobs:
       - name: "⏳ Keep Runner Alive"
         run: |
           Write-Host "==============================================="
-          Write-Host "💻 Your Cloud PC is ready!"
-          Write-Host "🔗 Go to: https://remotedesktop.google.com/access"
-          Write-Host "🔊 Virtual Sound is enabled!"
-          Write-Host "⏳ Keeping the server alive for up to 6 hours..."
+          Write-Host "💻 Cloud PC OS: ${{ github.event.inputs.OS_VERSION }}"
+          Write-Host "🔗 Access: https://remotedesktop.google.com/access"
+          Write-Host "🔊 Sound is READY. Set output to 'CABLE Input' if silent."
           Write-Host "==============================================="
-          
-          while ($true) { 
-              Start-Sleep -Seconds 300 
-          }
+          while ($true) { Start-Sleep -Seconds 300 }
