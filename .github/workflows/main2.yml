@@ -1,0 +1,132 @@
+name: "Universal Cloud Desktop (Windows/macOS)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      TARGET_OS:
+        description: "Select Target Operating System"
+        type: choice
+        required: true
+        default: "windows"
+        options:
+          - "windows"
+          - "macos"
+      CODE:
+        description: "CRD Headless Code (Required for Windows)"
+        required: false
+      PIN:
+        description: "CRD PIN (6+ digits)"
+        required: false
+        default: "123456"
+      RUSTDESK_PASSWORD:
+        description: "Custom RustDesk Password (for macOS)"
+        default: "password123"
+        required: false
+
+jobs:
+  # --- WINDOWS SECTION ---
+  windows-rdp:
+    name: "🚀 Windows Cloud PC"
+    if: ${{ github.event.inputs.TARGET_OS == 'windows' }}
+    runs-on: windows-latest
+    env:
+      RAW_CODE: ${{ github.event.inputs.CODE }}
+      PIN_INPUT: ${{ github.event.inputs.PIN }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: "🔧 Install Core Software"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
+          
+          Write-Host "Downloading Tools..."
+          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.11.0/node-v24.11.0-x64.msi" -OutFile "$userDownloads\node-v24.msi" -UseBasicParsing
+          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
+
+          Write-Host "Installing Drivers and Apps..."
+          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
+          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\node-v24.msi`" /qn /norestart"
+
+      - name: "🔊 Enable Audio Services"
+        run: |
+          Set-Service -Name "Audiosrv" -StartupType Automatic
+          Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
+          Start-Service "Audiosrv", "AudioEndpointBuilder" -ErrorAction SilentlyContinue
+          reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v "fDisableAudioCapture" /t REG_DWORD /d 0 /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v "fForceAudioRedirection" /t REG_DWORD /d 1 /f
+
+      - name: "🌟 Start Chrome Remote Desktop"
+        run: |
+          if (-not $env:RAW_CODE) { throw "Error: CODE input is required for Windows." }
+          $crdCommand = "$env:RAW_CODE --pin=$env:PIN_INPUT"
+          cmd.exe /c $crdCommand
+
+      - name: "⏳ Keep Alive"
+        run: |
+          Write-Host "Windows Cloud PC Ready."
+          while ($true) { Start-Sleep -Seconds 300 }
+
+  # --- MACOS SECTION ---
+  macos-rdp:
+    name: "🚀 macOS Full Access"
+    if: ${{ github.event.inputs.TARGET_OS == 'macos' }}
+    runs-on: macos-14
+    steps:
+      - name: "👤 Create Admin Account"
+        run: |
+          USERNAME="admin"
+          PASSWORD="123456"
+          sudo dscl . -create /Users/$USERNAME
+          sudo dscl . -passwd /Users/$USERNAME $PASSWORD
+          sudo dscl . -append /Groups/admin GroupMembership $USERNAME
+          sudo createhomedir -u $USERNAME -c
+
+      - name: "🦀 Install Remote Tools"
+        run: |
+          brew install --cask rustdesk
+          curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
+          sudo hdiutil attach /tmp/crd.dmg -nobrowse
+          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
+          sudo installer -pkg "$PKG_PATH" -target /
+
+      - name: "🔓 SQLite3 Permission Injection"
+        run: |
+          # Bundling the security bypass logic for TCC database
+          SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")
+          APPS=("com.carriez.rustdesk" "com.google.chromeremotedesktop.me2me-host")
+          DB_PATHS=("/Library/Application Support/com.apple.TCC/TCC.db" "$HOME/Library/Application Support/com.apple.TCC/TCC.db")
+          
+          for DB in "${DB_PATHS[@]}"; do
+            sudo mkdir -p "$(dirname "$DB")"
+            for APP in "${APPS[@]}"; do
+              for SERVICE in "${SERVICES[@]}"; do
+                sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$SERVICE', '$APP', 0, 2, 4, 1, 0, strftime('%s','now'));"
+              done
+            done
+          done
+          sudo killall -9 tccd || true
+
+      - name: "🚀 Start RustDesk"
+        run: |
+          PW="${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          sudo defaults write /Library/Preferences/com.carriez.RustDesk.plist password "$PW"
+          open -a "RustDesk"
+          sleep 15
+          screencapture -x /tmp/id.png
+          # Note: Uploading the ID to a public API like catbox is a security risk. Use with caution.
+          URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/id.png" https://catbox.moe/user/api.php)
+          echo "RUSTDESK_ID_IMAGE: $URL"
+
+      - name: "🔄 Connection Loop"
+        run: |
+          caffeinate -dis & 
+          while true; do
+            sleep 60
+            echo "Session active..."
+          done
