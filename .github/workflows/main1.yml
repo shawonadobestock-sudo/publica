@@ -1,4 +1,4 @@
-name: "Windows Cloud PC (Fixed Setup + Theme)"
+name: "Windows Cloud PC (Multi-OS + Sound)"
 
 on:
   workflow_dispatch:
@@ -12,6 +12,7 @@ on:
           - "windows-latest"
           - "windows-2025"
           - "windows-2022"
+          - "windows-2025-vs2026"
       CODE:
         description: "Full headless command from Google Remote Desktop"
         required: true
@@ -20,94 +21,84 @@ on:
         required: false
         default: "123456"
 
+concurrency:
+  group: crd-register-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   crd-setup:
     name: "🚀 RDP Runner"
+    # This line now uses your dropdown choice!
     runs-on: ${{ github.event.inputs.OS_VERSION }}
 
     env:
       RAW_CODE: ${{ github.event.inputs.CODE }}
       PIN_INPUT: ${{ github.event.inputs.PIN }}
-      # Using a more reliable direct link for the wallpaper
-      WALLPAPER_URL: "https://raw.githubusercontent.com/Leo-G/Devops-Internal/master/Wallpapers/BlueAbstract.jpg"
 
     defaults:
       run:
         shell: pwsh
 
     steps:
-      - name: "🔧 Download & Install Core Software"
+      - name: "🔧 Download & Install Software"
         run: |
+          $ErrorActionPreference = 'Stop'
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
           
-          # 1. Download Drivers & Tools
-          Write-Host "Downloading Drivers..."
+          Write-Host "Downloading Chrome Remote Desktop..."
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
+          
+          Write-Host "Downloading Node.js..."
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.11.0/node-v24.11.0-x64.msi" -OutFile "$userDownloads\node-v24.msi" -UseBasicParsing
+          
+          Write-Host "Downloading VS Code..."
+          Invoke-WebRequest -Uri "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user" -OutFile "$userDownloads\VisualStudio.exe" -UseBasicParsing
+
+          Write-Host "Downloading Virtual Audio Cable..."
           Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
 
-          # 2. Download Browsers
-          Write-Host "Downloading GoLogin & MostLogin..."
-          Invoke-WebRequest -Uri "https://dl.gologin.com/gologin.exe" -OutFile "$userDownloads\gologin.exe" -UseBasicParsing
-          Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile "$userDownloads\MostLogin-setup.exe" -UseBasicParsing
-
-          # 3. Install Sound (Wait only 30s to prevent hang)
+          Write-Host "Extracting and Installing Drivers..."
           Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
-          Start-Process -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
-          Start-Sleep -Seconds 15
-          
-          # 4. Install CRD
+          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
+
+          Write-Host "Silent Installation of Apps..."
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
-
-          # 5. Install Browsers with Timeout to avoid getting stuck
-          Write-Host "Installing GoLogin..."
-          Start-Process -FilePath "$userDownloads\gologin.exe" -ArgumentList "/S"
-          Start-Sleep -Seconds 30 # Give it time to install in background
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\node-v24.msi`" /qn /norestart"
+          Start-Process -Wait -FilePath "$userDownloads\VisualStudio.exe" -ArgumentList "/verysilent /mergetasks=!runcode"
           
-          Write-Host "Installing MostLogin..."
-          Start-Process -FilePath "$userDownloads\MostLogin-setup.exe" -ArgumentList "/verysilent", "/allusers", "/norestart"
-          Start-Sleep -Seconds 30
-          
-          Write-Host "✅ Software installed (Background processes might still be finishing)."
+          Write-Host "✅ Software and Drivers installed."
 
-      - name: "🎨 Customize Windows (Dark Theme + Wallpaper)"
+      - name: "🔊 Enable & Initialize Windows Audio"
         run: |
-          # Set Dark Theme
-          $ThemePath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-          if (-not (Test-Path $ThemePath)) { New-Item -Path $ThemePath -Force }
-          Set-ItemProperty -Path $ThemePath -Name "AppsUseLightTheme" -Value 0
-          Set-ItemProperty -Path $ThemePath -Name "SystemUsesLightTheme" -Value 0
-
-          # Download and Set Wallpaper
-          $wallpaperPath = "$env:USERPROFILE\wallpaper.jpg"
-          try {
-            Invoke-WebRequest -Uri $env:WALLPAPER_URL -OutFile $wallpaperPath -UseBasicParsing
-            $regPath = "HKCU:\Control Panel\Desktop"
-            Set-ItemProperty -Path $regPath -Name "Wallpaper" -Value $wallpaperPath
-            Set-ItemProperty -Path $regPath -Name "WallpaperStyle" -Value "2"
-            
-            # Force Refresh
-            Add-Type -TypeDefinition "using System.Runtime.InteropServices; public class Wallpaper { [DllImport(`"user32.dll`")] public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni); }"
-            [Wallpaper]::SystemParametersInfo(0x0014, 0, $wallpaperPath, 0x01)
-            Write-Host "✅ Wallpaper and Dark Theme applied."
-          } catch {
-            Write-Host "⚠️ Wallpaper failed to download, but skipping error to keep RDP alive."
-          }
-
-      - name: "🔊 Initialize Sound Services"
-        run: |
+          Write-Host "Starting Audio Services..."
           Set-Service -Name "Audiosrv" -StartupType Automatic
           Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
           Start-Service "Audiosrv" -ErrorAction SilentlyContinue
           Start-Service "AudioEndpointBuilder" -ErrorAction SilentlyContinue
 
-      - name: "🌟 Start RDP"
-        run: |
-          # Using the command provided in your input
-          $crdCommand = "$env:RAW_CODE --pin=$env:PIN_INPUT"
-          cmd.exe /c $crdCommand
+          Write-Host "Applying Registry tweaks for Sound..."
+          reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v "fDisableAudioCapture" /t REG_DWORD /d 0 /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v "fForceAudioRedirection" /t REG_DWORD /d 1 /f
+          
+          Write-Host "✅ Audio services initialized."
 
-      - name: "⏳ Alive"
+      - name: "🌟 Start Chrome Remote Desktop"
         run: |
-          Write-Host "💻 Cloud PC is Active!"
+          Write-Host "Executing Google Headless Code..."
+          $crdCommand = "$env:RAW_CODE --pin=$env:PIN_INPUT"
+          try {
+              cmd.exe /c $crdCommand
+              Write-Host "✅ Chrome Remote Desktop started successfully!"
+          } catch {
+              Write-Error "❌ Failed to start CRD: $($_.Exception.Message)"
+          }
+
+      - name: "⏳ Keep Runner Alive"
+        run: |
+          Write-Host "==============================================="
+          Write-Host "💻 Cloud PC OS: ${{ github.event.inputs.OS_VERSION }}"
+          Write-Host "🔗 Access: https://remotedesktop.google.com/access"
+          Write-Host "🔊 Sound is READY. Set output to 'CABLE Input' if silent."
+          Write-Host "==============================================="
           while ($true) { Start-Sleep -Seconds 300 }
