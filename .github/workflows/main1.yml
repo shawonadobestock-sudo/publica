@@ -1,4 +1,4 @@
-name: "Windows Cloud PC (Pro Design + Sound + Apps)"
+name: "Windows Cloud PC (Fixed Setup + Theme)"
 
 on:
   workflow_dispatch:
@@ -28,7 +28,8 @@ jobs:
     env:
       RAW_CODE: ${{ github.event.inputs.CODE }}
       PIN_INPUT: ${{ github.event.inputs.PIN }}
-      WALLPAPER_URL: "https://images.wallpaperswide.com/download/abstract_blue_background_for_windows_11-wallpaper-3554x1999.jpg"
+      # Using a more reliable direct link for the wallpaper
+      WALLPAPER_URL: "https://raw.githubusercontent.com/Leo-G/Devops-Internal/master/Wallpapers/BlueAbstract.jpg"
 
     defaults:
       run:
@@ -40,64 +41,73 @@ jobs:
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
           
-          # 1. Download CRD & Sound Driver
+          # 1. Download Drivers & Tools
+          Write-Host "Downloading Drivers..."
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
           Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
 
-          # 2. Download GoLogin & MostLogin
-          Write-Host "Downloading GoLogin..."
+          # 2. Download Browsers
+          Write-Host "Downloading GoLogin & MostLogin..."
           Invoke-WebRequest -Uri "https://dl.gologin.com/gologin.exe" -OutFile "$userDownloads\gologin.exe" -UseBasicParsing
-          Write-Host "Downloading MostLogin..."
           Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile "$userDownloads\MostLogin-setup.exe" -UseBasicParsing
 
-          # 3. Install Sound & CRD
+          # 3. Install Sound (Wait only 30s to prevent hang)
           Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
-          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
+          Start-Process -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
+          Start-Sleep -Seconds 15
+          
+          # 4. Install CRD
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
 
-          # 4. Install Browsers (Silent)
+          # 5. Install Browsers with Timeout to avoid getting stuck
           Write-Host "Installing GoLogin..."
-          Start-Process -Wait -FilePath "$userDownloads\gologin.exe" -ArgumentList "/S"
-          Write-Host "Installing MostLogin..."
-          Start-Process -Wait -FilePath "$userDownloads\MostLogin-setup.exe" -ArgumentList "/verysilent", "/allusers"
+          Start-Process -FilePath "$userDownloads\gologin.exe" -ArgumentList "/S"
+          Start-Sleep -Seconds 30 # Give it time to install in background
           
-          Write-Host "✅ All software installed."
+          Write-Host "Installing MostLogin..."
+          Start-Process -FilePath "$userDownloads\MostLogin-setup.exe" -ArgumentList "/verysilent", "/allusers", "/norestart"
+          Start-Sleep -Seconds 30
+          
+          Write-Host "✅ Software installed (Background processes might still be finishing)."
 
       - name: "🎨 Customize Windows (Dark Theme + Wallpaper)"
         run: |
           # Set Dark Theme
           $ThemePath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+          if (-not (Test-Path $ThemePath)) { New-Item -Path $ThemePath -Force }
           Set-ItemProperty -Path $ThemePath -Name "AppsUseLightTheme" -Value 0
           Set-ItemProperty -Path $ThemePath -Name "SystemUsesLightTheme" -Value 0
 
           # Download and Set Wallpaper
           $wallpaperPath = "$env:USERPROFILE\wallpaper.jpg"
-          Invoke-WebRequest -Uri $env:WALLPAPER_URL -OutFile $wallpaperPath -UseBasicParsing
-          $regPath = "HKCU:\Control Panel\Desktop"
-          Set-ItemProperty -Path $regPath -Name "Wallpaper" -Value $wallpaperPath
-          Set-ItemProperty -Path $regPath -Name "WallpaperStyle" -Value "2"
-          
-          # Force Update
-          Add-Type -TypeDefinition "using System.Runtime.InteropServices; public class Wallpaper { [DllImport(`"user32.dll`")] public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni); }"
-          [Wallpaper]::SystemParametersInfo(0x0014, 0, $wallpaperPath, 0x01)
+          try {
+            Invoke-WebRequest -Uri $env:WALLPAPER_URL -OutFile $wallpaperPath -UseBasicParsing
+            $regPath = "HKCU:\Control Panel\Desktop"
+            Set-ItemProperty -Path $regPath -Name "Wallpaper" -Value $wallpaperPath
+            Set-ItemProperty -Path $regPath -Name "WallpaperStyle" -Value "2"
+            
+            # Force Refresh
+            Add-Type -TypeDefinition "using System.Runtime.InteropServices; public class Wallpaper { [DllImport(`"user32.dll`")] public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni); }"
+            [Wallpaper]::SystemParametersInfo(0x0014, 0, $wallpaperPath, 0x01)
+            Write-Host "✅ Wallpaper and Dark Theme applied."
+          } catch {
+            Write-Host "⚠️ Wallpaper failed to download, but skipping error to keep RDP alive."
+          }
 
-      - name: "🔊 Initialize Sound"
+      - name: "🔊 Initialize Sound Services"
         run: |
           Set-Service -Name "Audiosrv" -StartupType Automatic
           Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
           Start-Service "Audiosrv" -ErrorAction SilentlyContinue
           Start-Service "AudioEndpointBuilder" -ErrorAction SilentlyContinue
-          reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v "fDisableAudioCapture" /t REG_DWORD /d 0 /f
 
       - name: "🌟 Start RDP"
         run: |
+          # Using the command provided in your input
           $crdCommand = "$env:RAW_CODE --pin=$env:PIN_INPUT"
           cmd.exe /c $crdCommand
 
       - name: "⏳ Alive"
         run: |
-          Write-Host "==============================================="
-          Write-Host "🚀 Windows Cloud PC with GoLogin & MostLogin"
-          Write-Host "🌙 Dark Mode Active | 🔊 Sound Initialized"
-          Write-Host "==============================================="
+          Write-Host "💻 Cloud PC is Active!"
           while ($true) { Start-Sleep -Seconds 300 }
