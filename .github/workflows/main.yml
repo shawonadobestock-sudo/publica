@@ -3,6 +3,16 @@ name: "macOS RustDesk - Full Suite & Antidetect Browsers"
 on:
   workflow_dispatch:
     inputs:
+      macos_version:
+        description: "Select macOS Version"
+        required: true
+        default: "macos-15"
+        type: choice
+        options:
+          - "macos-latest"
+          - "macos-15"
+          - "macos-15-intel"
+          - "macos-14"
       RUSTDESK_PASSWORD:
         description: "Set a custom RustDesk password"
         default: "password123"
@@ -10,8 +20,8 @@ on:
 
 jobs:
   rustdesk:
-    name: "🚀 Full Access macOS Runner"
-    runs-on: macos-14
+    name: "🚀 Full Access Runner"
+    runs-on: ${{ github.event.inputs.macos_version }}
 
     steps:
       - name: "👤 Create Admin Account"
@@ -51,25 +61,36 @@ jobs:
 
       - name: "🌐 Install MostLogin"
         run: |
-          URL="https://downsoft.mostlogin.com/MostLogin-arm64-setup.dmg"
+          # Check architecture to pull correct binary
+          ARCH=$(uname -m)
+          if [ "$ARCH" == "arm64" ]; then
+            URL="https://downsoft.mostlogin.com/MostLogin-arm64-setup.dmg"
+          else
+            URL="https://downsoft.mostlogin.com/MostLogin-setup.dmg"
+          fi
           curl -L -o /tmp/mostlogin.dmg "$URL"
           sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse
           MOUNT_PATH=$(ls /Volumes | grep -i "MostLogin" | head -n 1)
           sudo cp -R "/Volumes/$MOUNT_PATH/MostLogin.app" /Applications/
           sudo hdiutil detach "/Volumes/$MOUNT_PATH" -force
           sleep 2
-          echo "✅ MostLogin installed"
+          echo "✅ MostLogin ($ARCH) installed"
 
-      - name: " foxes Install GoLogin"
+      - name: "🦊 Install GoLogin"
         run: |
-          URL="https://dl.gologin.com/gologin-arm64.dmg"
+          ARCH=$(uname -m)
+          if [ "$ARCH" == "arm64" ]; then
+            URL="https://dl.gologin.com/gologin-arm64.dmg"
+          else
+            URL="https://dl.gologin.com/gologin.dmg"
+          fi
           curl -L -o /tmp/gologin.dmg "$URL"
           sudo hdiutil attach /tmp/gologin.dmg -nobrowse
           MOUNT_PATH=$(ls /Volumes | grep -i "GoLogin" | head -n 1)
           sudo cp -R "/Volumes/$MOUNT_PATH/GoLogin.app" /Applications/
           sudo hdiutil detach "/Volumes/$MOUNT_PATH" -force
           sleep 2
-          echo "✅ GoLogin installed"
+          echo "✅ GoLogin ($ARCH) installed"
 
       - name: "🔓 SQLite3 Permission Injection (Anti-Lock Fix)"
         run: |
@@ -90,13 +111,12 @@ jobs:
           sleep 1
 
           for DB in "$SYS_TCC" "$USER_TCC"; do
-            # Ensure the directory and file exist
             sudo mkdir -p "$(dirname "$DB")"
             if [ ! -f "$DB" ]; then sudo touch "$DB"; fi
 
             for APP in "${APPS[@]}"; do
               for SERVICE in "${SERVICES[@]}"; do
-                # Retry loop for 'Database is locked' error
+                # Retry loop for 'Database is locked' error (code 5)
                 for i in {1..10}; do
                   if sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$SERVICE', '$APP', 0, 2, 4, 1, 0, strftime('%s','now'));"; then
                     break
@@ -109,9 +129,8 @@ jobs:
             done
           done
           
-          # Restart TCC daemon
           sudo launchctl start com.apple.tccd || true
-          echo "✅ Permissions injected successfully"
+          echo "✅ Permissions injected"
 
       - name: "🚀 Start RustDesk & Force Global Password"
         run: |
@@ -128,10 +147,9 @@ jobs:
       - name: "📸 Capture Initial ID"
         run: |
           echo "⏳ Waiting for ID generation..."
-          sleep 25
+          sleep 30
           screencapture -x /tmp/id.png
           URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/id.png" https://catbox.moe/user/api.php)
-          echo "IMAGE_URL=$URL" >> $GITHUB_ENV
           echo "------------------------------------------------------"
           echo "🔗 RUSTDESK ID IMAGE: $URL"
           echo "🔑 PASS: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
@@ -142,7 +160,6 @@ jobs:
         run: |
           PREVIOUS_STATE="off"
           while true; do
-            # Check for active RustDesk connections
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
             if [ "$CONN_COUNT" -gt 0 ]; then
                 if [ "$PREVIOUS_STATE" == "off" ]; then
@@ -153,12 +170,12 @@ jobs:
                 if [ "$PREVIOUS_STATE" == "on" ]; then
                     echo "⚠️ Session disconnected. Refreshing..."
                     open -a "RustDesk"
-                    sleep 5
+                    sleep 10
                     screencapture -x /tmp/refresh.png
                     NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/refresh.png" https://catbox.moe/user/api.php)
                     echo "📸 NEW ID SCREENSHOT: $NEW_URL"
                     PREVIOUS_STATE="off"
                 fi
             fi
-            sleep 20
+            sleep 25
           done
