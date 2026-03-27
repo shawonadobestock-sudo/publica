@@ -6,7 +6,7 @@ on:
       macos_version:
         description: "Select macOS Version"
         required: true
-        default: "macos-15"
+        default: "macos-14" # Changed from macos-15 to macos-14
         type: choice
         options:
           - "macos-latest"
@@ -138,13 +138,38 @@ jobs:
           sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "$PW"
           echo "✅ Password set to: $PW"
 
-      - name: "📸 Capture Initial ID"
+      - name: "📸 Capture Initial ID & Extract to Console"
         run: |
           echo "⏳ Waiting for ID generation..."
           sleep 30
+          
+          # 1. Take Screenshot & Upload (Kept Intact)
           screencapture -x /tmp/id.png
           URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/id.png" https://catbox.moe/user/api.php)
+          
+          # 2. Extract RustDesk ID from Config
+          RUSTDESK_ID="Not Found (Check Screenshot)"
+          CONFIG_FILE=$(find /Users -name "RustDesk.toml" 2>/dev/null | head -n 1)
+          
+          if [ ! -z "$CONFIG_FILE" ]; then
+            # Extract just the numbers from the "id =" line
+            EXTRACTED_ID=$(grep -E "^id\s*=" "$CONFIG_FILE" | tr -dc '0-9')
+            if [ ! -z "$EXTRACTED_ID" ]; then
+              RUSTDESK_ID="$EXTRACTED_ID"
+            fi
+          fi
+          
+          # 3. CLI Fallback (If the config file isn't found)
+          if [[ "$RUSTDESK_ID" == "Not Found"* ]]; then
+            CLI_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null | grep -oE '[0-9]+' || true)
+            if [ ! -z "$CLI_ID" ]; then
+              RUSTDESK_ID="$CLI_ID"
+            fi
+          fi
+
+          # 4. Print Outputs
           echo "------------------------------------------------------"
+          echo "🆔 RUSTDESK ID: $RUSTDESK_ID"
           echo "🔗 RUSTDESK ID IMAGE: $URL"
           echo "🔑 PASS: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           echo "👤 ADMIN: admin | PASS: 123456"
