@@ -1,0 +1,154 @@
+name: "macOS Remote Suite - Full Keystroke & Clipboard"
+on:
+  workflow_dispatch:
+    inputs:
+      macos_version:
+        description: "Select macOS Version"
+        required: true
+        default: "macos-14"
+        type: choice
+        options:
+          - "macos-latest"
+          - "macos-15"
+          - "macos-14"
+      REMOTE_PASSWORD:
+        description: "Set password for RustDesk & AnyDesk"
+        default: "password123"
+        required: true
+
+jobs:
+  remote-access:
+    name: "🚀 Full Access Runner"
+    runs-on: ${{ github.event.inputs.macos_version }}
+    steps:
+      - name: "👤 Create Admin Account"
+        run: |
+          USERNAME="admin"
+          PASSWORD="123456"
+          sudo dscl . -create /Users/$USERNAME
+          sudo dscl . -passwd /Users/$USERNAME $PASSWORD
+          sudo dscl . -append /Groups/admin GroupMembership $USERNAME
+          echo "✅ Admin account created (admin/123456)"
+
+      - name: "🚫 Disable Sleep & Keep Screen On"
+        run: |
+          sudo pmset -a sleep 0 displaysleep 0 disksleep 0 hibernatemode 0
+          nohup caffeinate -dis & 
+          echo "✅ Power management set to 'Always On'"
+
+      - name: "📦 Install RustDesk & AnyDesk"
+        run: |
+          brew install --cask rustdesk anydesk
+          echo "✅ Remote tools installed"
+
+      - name: "🖥️ Install Chrome Remote Desktop"
+        run: |
+          curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
+          sudo hdiutil attach /tmp/crd.dmg -nobrowse
+          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
+          sudo installer -pkg "$PKG_PATH" -target /
+          sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
+          echo "✅ CRD installed"
+
+      - name: "🌐 Install Antidetect Browsers (macOS 14 Only)"
+        if: github.event.inputs.macos_version == 'macos-14'
+        run: |
+          # MostLogin
+          curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-arm64-setup.dmg"
+          sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse
+          MOUNT_ML=$(ls /Volumes | grep -i "MostLogin" | head -n 1)
+          sudo cp -R "/Volumes/$MOUNT_ML/MostLogin.app" /Applications/
+          sudo hdiutil detach "/Volumes/$MOUNT_ML" -force
+          # GoLogin
+          curl -L -o /tmp/gologin.dmg "https://dl.gologin.com/gologin-arm64.dmg"
+          sudo hdiutil attach /tmp/gologin.dmg -nobrowse
+          MOUNT_GL=$(ls /Volumes | grep -i "GoLogin" | head -n 1)
+          sudo cp -R "/Volumes/$MOUNT_GL/GoLogin.app" /Applications/
+          sudo hdiutil detach "/Volumes/$MOUNT_GL" -force
+          echo "✅ Browsers installed"
+
+      - name: "🔓 Inject Permissions (Ctrl+C/V & Remote Control Fix)"
+        run: |
+          # Bundle IDs for all target apps
+          RUSTDESK="com.carriez.rustdesk"
+          ANYDESK="com.philandro.anydesk"
+          CRD_HOST="com.google.chromeremotedesktop.me2me-host"
+          GOLOGIN="com.gologin.app"
+          MOSTLOGIN="com.mostlogin.browser"
+
+          # Required services for Copy/Paste and Keystrokes
+          # kTCCServicePostEvent: Allows simulating keys (Ctrl/Cmd)
+          # kTCCServiceAccessibility: Allows the app to control the UI
+          SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")
+          APPS=("$RUSTDESK" "$ANYDESK" "$CRD_HOST")
+
+          if [[ "${{ github.event.inputs.macos_version }}" == "macos-14" ]]; then
+            APPS+=("$GOLOGIN" "$MOSTLOGIN")
+          fi
+
+          SYS_TCC="/Library/Application Support/com.apple.TCC/TCC.db"
+          USER_TCC="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+
+          sudo launchctl stop com.apple.tccd || true
+          sudo killall -9 tccd || true
+          sleep 2
+
+          for DB in "$SYS_TCC" "$USER_TCC"; do
+            sudo mkdir -p "$(dirname "$DB")"
+            if [ ! -f "$DB" ]; then sudo touch "$DB"; fi
+            for APP in "${APPS[@]}"; do
+              for SERVICE in "${SERVICES[@]}"; do
+                # Injecting 'auth_value = 2' (Allowed) for every app/service combo
+                sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$SERVICE', '$APP', 0, 2, 4, 1, 0, strftime('%s','now'));"
+              done
+            done
+          done
+          
+          sudo launchctl start com.apple.tccd || true
+          echo "✅ Full Keystroke and Clipboard permissions injected"
+
+      - name: "🚀 Configure Passwords & Start Apps"
+        run: |
+          PW="${{ github.event.inputs.REMOTE_PASSWORD }}"
+          
+          # RustDesk Password
+          sudo defaults write /Library/Preferences/com.carriez.RustDesk.plist password "$PW"
+          open -a "RustDesk"
+          sleep 2
+          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "$PW"
+          
+          # AnyDesk Password (using standard CLI flag)
+          echo "$PW" | sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password
+          open -a "AnyDesk"
+          
+          echo "✅ Remote passwords set to: $PW"
+
+      - name: "📸 Extract IDs & Final Console Log"
+        run: |
+          echo "⏳ Waiting for IDs to register..."
+          sleep 20
+          
+          # Get IDs via CLI
+          R_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Unknown")
+          A_ID=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null | awk '{print $NF}' | grep -oE '[0-9]+' || echo "Unknown")
+          
+          # Visual confirmation
+          screencapture -x /tmp/final.png
+          URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/final.png" https://catbox.moe/user/api.php)
+
+          echo "------------------------------------------------------"
+          echo "🆔 RUSTDESK ID: $R_ID"
+          echo "🆔 ANYDESK ID:  $A_ID"
+          echo "🔗 ID SCREENSHOT: $URL"
+          echo "🔑 REMOTE PASS: ${{ github.event.inputs.REMOTE_PASSWORD }}"
+          echo "👤 ADMIN USER:  admin | PASS: 123456"
+          echo "------------------------------------------------------"
+
+      - name: "🔄 Keep Alive Heartbeat"
+        run: |
+          while true; do
+            # Refresh AnyDesk & RustDesk if they crash
+            if ! pgrep -x "AnyDesk" > /dev/null; then open -a "AnyDesk"; fi
+            if ! pgrep -x "rustdesk" > /dev/null; then open -a "RustDesk"; fi
+            sleep 60
+          done
