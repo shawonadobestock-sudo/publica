@@ -69,25 +69,41 @@ jobs:
           sudo hdiutil detach "/Volumes/$MOUNT_GL" -force          
           echo "✅ Browsers installed"      
 
-      - name: "🧹 Clean Dock & Set Purple Wallpaper"        
+      - name: "🧹 Clean Dock & FORCE Purple Wallpaper"        
         run: |          
-          # Remove all unwanted apps from Dock
+          # 1. Reset and Clear Dock
           defaults write com.apple.dock persistent-apps -array
+
+          # 2. Add Requested Apps to Dock
+          # Launchpad (System App)
+          defaults write com.apple.dock persistent-apps -array-add '<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>/System/Applications/Launchpad.app</string><key>_CFURLStringType</key><integer>0</integer></dict></dict></dict>'
           
-          # Add only useful apps back to Dock
-          DOCK_APPS=("/Applications/HopToDesk.app" "/Applications/Google Chrome.app")
-          for APP in "${DOCK_APPS[@]}"; do
+          # System Settings, MostLogin, HopToDesk, Chrome
+          APPS=(
+            "/System/Applications/System Settings.app"
+            "/Applications/MostLogin.app"
+            "/Applications/HopToDesk.app"
+            "/Applications/Google Chrome.app"
+          )
+
+          for APP in "${APPS[@]}"; do
             if [ -d "$APP" ]; then
               defaults write com.apple.dock persistent-apps -array-add "<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>$APP</string><key>_CFURLStringType</key><integer>0</integer></dict></dict></dict>"
             fi
           done
+
+          # 3. Kill Wallpaper Video Services (The "Green Hill" culprit)
+          sudo killall WallpaperAgent || true
+          sudo killall AerialWallpaperVideoService || true
           
-          # Restart Dock to apply changes
+          # 4. Force Static Purple Wallpaper
+          WP_PATH="/System/Library/Desktop Pictures/Monterey Graphic.heic"
+          sqlite3 ~/Library/Application\ Support/Dock/desktoppicture.db "update data set value = '$WP_PATH'" || true
+          osascript -e "tell application \"System Events\" to set picture of every desktop to \"$WP_PATH\""
+          
+          # 5. Restart Dock
           killall Dock
-          
-          # Set Monterey Purple Graphic Wallpaper
-          osascript -e 'tell application "System Events" to set picture of every desktop to "/System/Library/Desktop Pictures/Monterey Graphic.heic"'
-          echo "✅ Dock cleaned and Purple Wallpaper set"
+          echo "✅ Dock and Wallpaper updated"
 
       - name: "🔓 Inject Permissions (Ctrl+C/V & Remote Control)"        
         run: |          
