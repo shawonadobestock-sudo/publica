@@ -69,16 +69,12 @@ jobs:
           sudo hdiutil detach "/Volumes/$MOUNT_GL" -force          
           echo "✅ Browsers installed"      
 
-      - name: "🧹 Clean Dock & FORCE Purple Wallpaper"        
+      - name: "🧹 Clean Dock & FORCE Custom Wallpaper"        
         run: |          
-          # 1. Reset and Clear Dock
+          # 1. Clear Dock and add requested items
           defaults write com.apple.dock persistent-apps -array
-
-          # 2. Add Requested Apps to Dock
-          # Launchpad (System App)
           defaults write com.apple.dock persistent-apps -array-add '<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>/System/Applications/Launchpad.app</string><key>_CFURLStringType</key><integer>0</integer></dict></dict></dict>'
           
-          # System Settings, MostLogin, HopToDesk, Chrome
           APPS=(
             "/System/Applications/System Settings.app"
             "/Applications/MostLogin.app"
@@ -92,18 +88,25 @@ jobs:
             fi
           done
 
-          # 3. Kill Wallpaper Video Services (The "Green Hill" culprit)
+          # 2. Download the Custom Wallpaper
+          curl -L -o /tmp/wallpaper.jpg "https://4kwallpapers.com/images/wallpapers/xiaomi-amoled-stock-7680x4320-25881.jpg"
+
+          # 3. Aggressively kill wallpaper agents to prevent reset
           sudo killall WallpaperAgent || true
           sudo killall AerialWallpaperVideoService || true
+
+          # 4. Inject the new wallpaper into the desktop database
+          DB_PATH="$HOME/Library/Application Support/Dock/desktoppicture.db"
+          if [ -f "$DB_PATH" ]; then
+            sqlite3 "$DB_PATH" "UPDATE data SET value = '/tmp/wallpaper.jpg';"
+          fi
+
+          # 5. Apply via AppleScript as well for immediate effect
+          osascript -e 'tell application "System Events" to set picture of every desktop to "/tmp/wallpaper.jpg"'
           
-          # 4. Force Static Purple Wallpaper
-          WP_PATH="/System/Library/Desktop Pictures/Monterey Graphic.heic"
-          sqlite3 ~/Library/Application\ Support/Dock/desktoppicture.db "update data set value = '$WP_PATH'" || true
-          osascript -e "tell application \"System Events\" to set picture of every desktop to \"$WP_PATH\""
-          
-          # 5. Restart Dock
+          # 6. Restart Dock
           killall Dock
-          echo "✅ Dock and Wallpaper updated"
+          echo "✅ Wallpaper and Dock items updated"
 
       - name: "🔓 Inject Permissions (Ctrl+C/V & Remote Control)"        
         run: |          
