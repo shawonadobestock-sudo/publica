@@ -1,4 +1,4 @@
-name: "macOS Remote Suite - RustDesk & AnyDesk Full"
+name: "macOS Remote Suite - Final AnyDesk Fix"
 on:
   workflow_dispatch:
     inputs:
@@ -26,26 +26,20 @@ jobs:
           USERNAME="admin"
           PASSWORD="123456"
           sudo dscl . -create /Users/$USERNAME
-          sudo dscl . -create /Users/$USERNAME UserShell /bin/zsh
-          sudo dscl . -create /Users/$USERNAME RealName "Admin User"
-          sudo dscl . -create /Users/$USERNAME UniqueID "502"
-          sudo dscl . -create /Users/$USERNAME PrimaryGroupID 20
-          sudo dscl . -create /Users/$USERNAME NFSHomeDirectory /Users/$USERNAME
           sudo dscl . -passwd /Users/$USERNAME $PASSWORD
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME
-          sudo createhomedir -u $USERNAME -c
-          echo "✅ Admin account created (admin/123456)"
+          echo "✅ Admin account created"
 
       - name: "🚫 Disable Sleep & Keep Screen On"
         run: |
           sudo pmset -a sleep 0 displaysleep 0 disksleep 0 hibernatemode 0
           nohup caffeinate -dis & 
-          echo "✅ Power management set to 'Always On'"
+          echo "✅ Power management set"
 
       - name: "📦 Install RustDesk & AnyDesk"
         run: |
           brew install --cask rustdesk anydesk
-          echo "✅ Remote tools installed"
+          echo "✅ Tools installed"
 
       - name: "🖥️ Install Chrome Remote Desktop"
         run: |
@@ -79,7 +73,6 @@ jobs:
           ANYDESK="com.philandro.anydesk"
           CRD_HOST="com.google.chromeremotedesktop.me2me-host"
           
-          # kTCCServicePostEvent & Accessibility are key for Ctrl+C/V (Command+C/V)
           SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")
           APPS=("$RUSTDESK" "$ANYDESK" "$CRD_HOST")
 
@@ -105,30 +98,34 @@ jobs:
           done
           
           sudo launchctl start com.apple.tccd || true
-          echo "✅ Permissions injected for Clipboard and Input Control"
+          echo "✅ TCC Permissions injected"
 
-      - name: "🚀 Configure Passwords (Fix Exit Code 64)"
+      - name: "🚀 Configure Passwords & Force AnyDesk Install"
         run: |
           PW="${{ github.event.inputs.REMOTE_PASSWORD }}"
           
-          # RustDesk Setup
+          # RustDesk
           sudo defaults write /Library/Preferences/com.carriez.RustDesk.plist password "$PW"
           open -a "RustDesk"
           sleep 5
           sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "$PW"
           
-          # AnyDesk Setup with Retry Loop to ensure service is alive
-          echo "🔄 Initializing AnyDesk Service..."
-          open -a "AnyDesk"
-          sleep 12 
+          # AnyDesk: Force Installation of the Service seen in your screenshot
+          echo "🛠️ Installing AnyDesk Service..."
+          sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --install-service || true
           
-          for i in {1..6}; do
+          # Give it time to register the daemon
+          sleep 10
+          open -a "AnyDesk"
+          
+          for i in {1..10}; do
             if echo "$PW" | sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password; then
               echo "✅ AnyDesk password set successfully!"
               break
             else
-              echo "⚠️ AnyDesk service not ready (Code 64), retrying in 8s... ($i/6)"
-              open -a "AnyDesk"
+              echo "⚠️ AnyDesk service not ready (Code 64), retrying... ($i/10)"
+              # Force restart background service
+              sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --service &
               sleep 8
             fi
           done
@@ -137,14 +134,9 @@ jobs:
         run: |
           echo "⏳ Syncing IDs..."
           sleep 15
-          
-          # Get RustDesk ID
           R_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Check Screenshot")
-          
-          # Get AnyDesk ID
           A_ID=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null | awk '{print $NF}' | grep -oE '[0-9]+' || echo "Check Screenshot")
           
-          # Capture Screenshot
           screencapture -x /tmp/ready.png
           URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/ready.png" https://catbox.moe/user/api.php)
 
@@ -159,11 +151,8 @@ jobs:
       - name: "🔄 Connection Loop & Heartbeat"
         run: |
           while true; do
-            # Ensure apps stay open
             if ! pgrep -x "AnyDesk" > /dev/null; then open -a "AnyDesk"; fi
             if ! pgrep -x "rustdesk" > /dev/null; then open -a "RustDesk"; fi
-            
-            # Simple heartbeat to console
-            echo "💓 [$(date)] Runner alive. Sessions monitored."
+            echo "💓 [$(date)] Runner alive."
             sleep 60
           done
