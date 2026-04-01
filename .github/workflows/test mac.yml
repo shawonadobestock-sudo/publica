@@ -1,4 +1,4 @@
-name: "macOS Remote Suite - Direct Force Inject"
+name: "macOS Remote Suite - RustDesk & HopToDesk"
 on:  
   workflow_dispatch:    
     inputs:      
@@ -12,7 +12,7 @@ on:
           - "macos-15"          
           - "macos-14"      
       REMOTE_PASSWORD:        
-        description: "Set password for RustDesk & AnyDesk"        
+        description: "Set password for RustDesk & HopToDesk"        
         default: "password123"        
         required: true
 
@@ -42,10 +42,10 @@ jobs:
           nohup caffeinate -dis &           
           echo "✅ Power management set"      
 
-      - name: "📦 Install RustDesk & AnyDesk"        
+      - name: "📦 Install RustDesk & HopToDesk"        
         run: |          
-          brew install --cask rustdesk anydesk          
-          echo "✅ Tools installed via Homebrew"      
+          brew install --cask rustdesk hoptodesk          
+          echo "✅ Remote tools installed"      
 
       - name: "🖥️ Install Chrome Remote Desktop"        
         run: |          
@@ -74,10 +74,10 @@ jobs:
       - name: "🔓 Inject Permissions (Ctrl+C/V & Remote Control)"        
         run: |          
           RUSTDESK="com.carriez.rustdesk"          
-          ANYDESK="com.philandro.anydesk"          
+          HOPTODESK="com.hoptodesk.hoptodesk"          
           CRD_HOST="com.google.chromeremotedesktop.me2me-host"                    
           SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")          
-          APPS=("$RUSTDESK" "$ANYDESK" "$CRD_HOST")          
+          APPS=("$RUSTDESK" "$HOPTODESK" "$CRD_HOST")          
           if [[ "${{ github.event.inputs.macos_version }}" == "macos-14" ]]; then            
             APPS+=("com.gologin.app" "com.mostlogin.browser")          
           fi          
@@ -96,9 +96,9 @@ jobs:
             done          
           done          
           sudo launchctl start com.apple.tccd || true          
-          echo "✅ Full Keystroke and Clipboard permissions injected"      
+          echo "✅ Keystroke and Clipboard permissions injected"      
 
-      - name: "🚀 Force Inject Passwords (No CLI needed)"        
+      - name: "🚀 Configure Passwords"        
         run: |          
           PW="${{ github.event.inputs.REMOTE_PASSWORD }}"                    
           # 1. RustDesk Setup          
@@ -106,40 +106,34 @@ jobs:
           open -a "RustDesk"          
           sleep 5          
           sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "$PW"                    
-          # 2. AnyDesk Setup: Direct Configuration File Injection          
-          echo "🛠️ Force-writing AnyDesk config..."          
-          sudo mkdir -p /Library/Preferences/          
-          # ad.security.interactive_access = 2 (Always Allow)          
-          # ad.security.password = Set Password          
-          sudo defaults write /Library/Preferences/com.philandro.anydesk.plist ad.security.interactive_access -int 2          
-          sudo defaults write /Library/Preferences/com.philandro.anydesk.plist ad.security.password "$PW"          
-          defaults write com.philandro.anydesk ad.security.interactive_access -int 2          
-          defaults write com.philandro.anydesk ad.security.password "$PW"                    
-          # Wake up AnyDesk          
-          open -a "AnyDesk"          
-          sleep 10          
-          echo "✅ Passwords and Remote Permissions Forced."      
+          # 2. HopToDesk Setup
+          # HopToDesk shares many CLI commands with RustDesk, making it very stable for GHA
+          open -a "HopToDesk"
+          sleep 8
+          sudo /Applications/HopToDesk.app/Contents/MacOS/hoptodesk --password "$PW"
+          echo "✅ Passwords configured for both tools"      
 
       - name: "📸 Extract IDs & Final Console Log"        
         run: |          
-          echo "⏳ Syncing IDs..."          
+          echo "⏳ Gathering IDs..."          
           sleep 15          
           R_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Check Screenshot")          
-          A_ID=$(/Applications/AnyDesk.app/Contents/MacOS/anydesk --get-id 2>/dev/null | awk '{print $NF}' | grep -oE '[0-9]{3,}' || echo "Check Screenshot")          
+          H_ID=$(/Applications/HopToDesk.app/Contents/MacOS/hoptodesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Check Screenshot")          
+          
           screencapture -x /tmp/ready.png          
           URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/ready.png" https://catbox.moe/user/api.php)          
           echo "------------------------------------------------------"          
-          echo "🆔 RUSTDESK ID: $R_ID"          
-          echo "🆔 ANYDESK ID:  $A_ID"          
+          echo "🆔 RUSTDESK ID:  $R_ID"          
+          echo "🆔 HOPTODESK ID: $H_ID"          
           echo "🔗 ID SCREENSHOT: $URL"          
-          echo "🔑 REMOTE PASS: ${{ github.event.inputs.REMOTE_PASSWORD }}"          
-          echo "👤 ADMIN USER:  admin | PASS: 123456"          
+          echo "🔑 REMOTE PASS:  ${{ github.event.inputs.REMOTE_PASSWORD }}"          
+          echo "👤 ADMIN USER:   admin | PASS: 123456"          
           echo "------------------------------------------------------"      
 
       - name: "🔄 Connection Loop & Heartbeat"        
         run: |          
           while true; do            
-            if ! pgrep -x "AnyDesk" > /dev/null; then open -a "AnyDesk"; fi            
+            if ! pgrep -x "HopToDesk" > /dev/null; then open -a "HopToDesk"; fi            
             if ! pgrep -x "rustdesk" > /dev/null; then open -a "RustDesk"; fi            
             echo "💓 [$(date)] Runner alive."            
             sleep 60          
