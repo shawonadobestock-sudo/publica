@@ -33,7 +33,7 @@ jobs:
       - name: "🚫 Disable Sleep & Keep Screen On"        
         run: |          
           sudo pmset -a sleep 0 displaysleep 0 disksleep 0 hibernatemode 0          
-          nohup caffeinate -dis &           
+          nohup caffeinate -dis &            
           echo "✅ Power management set"      
 
       - name: "📦 Install HopToDesk"        
@@ -69,7 +69,7 @@ jobs:
           sudo hdiutil detach "/Volumes/$MOUNT_GL" -force          
           echo "✅ Browsers installed"      
 
-      - name: "🧹 Clean Dock & Set Monterey Wallpaper"        
+      - name: "🧹 Clean Dock & Set Purple Wallpaper"        
         run: |          
           # Remove all unwanted apps from Dock
           defaults write com.apple.dock persistent-apps -array
@@ -85,9 +85,9 @@ jobs:
           # Restart Dock to apply changes
           killall Dock
           
-          # Set Monterey Wallpaper (Official Graphic Path)
+          # Set Monterey Purple Graphic Wallpaper
           osascript -e 'tell application "System Events" to set picture of every desktop to "/System/Library/Desktop Pictures/Monterey Graphic.heic"'
-          echo "✅ Dock cleaned and Wallpaper set"
+          echo "✅ Dock cleaned and Purple Wallpaper set"
 
       - name: "🔓 Inject Permissions (Ctrl+C/V & Remote Control)"        
         run: |          
