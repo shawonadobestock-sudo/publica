@@ -34,7 +34,7 @@ jobs:
           sudo dscl . -passwd /Users/$USERNAME $PASSWORD          
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME          
           sudo createhomedir -u $USERNAME -c          
-          echo "✅ Admin account created"      
+          echo "✅ Admin account created (admin/123456)"      
 
       - name: "🚫 Disable Sleep & Keep Screen On"        
         run: |          
@@ -44,7 +44,17 @@ jobs:
 
       - name: "📦 Install RustDesk & HopToDesk"        
         run: |          
-          brew install --cask rustdesk hoptodesk          
+          # Install RustDesk via Brew
+          brew install --cask rustdesk
+          
+          # Install HopToDesk via DMG
+          echo "📥 Downloading HopToDesk..."
+          curl -L -o /tmp/hoptodesk.dmg "https://www.hoptodesk.com/HopToDesk.dmg"
+          sudo hdiutil attach /tmp/hoptodesk.dmg -nobrowse
+          # Find the mount point dynamically as it may vary
+          MOUNT_POINT=$(ls /Volumes | grep -i "HopToDesk" | head -n 1)
+          sudo cp -R "/Volumes/$MOUNT_POINT/HopToDesk.app" /Applications/
+          sudo hdiutil detach "/Volumes/$MOUNT_POINT" -force
           echo "✅ Remote tools installed"      
 
       - name: "🖥️ Install Chrome Remote Desktop"        
@@ -59,11 +69,13 @@ jobs:
       - name: "🌐 Install Antidetect Browsers (macOS 14 Only)"        
         if: github.event.inputs.macos_version == 'macos-14'        
         run: |          
+          # MostLogin
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-arm64-setup.dmg"          
           sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse          
           MOUNT_ML=$(ls /Volumes | grep -i "MostLogin" | head -n 1)          
           sudo cp -R "/Volumes/$MOUNT_ML/MostLogin.app" /Applications/          
-          sudo hdiutil detach "/Volumes/$MOUNT_ML" -force          
+          sudo hdiutil detach "/Volumes/$MOUNT_ML" -force
+          # GoLogin          
           curl -L -o /tmp/gologin.dmg "https://dl.gologin.com/gologin-arm64.dmg"          
           sudo hdiutil attach /tmp/gologin.dmg -nobrowse          
           MOUNT_GL=$(ls /Volumes | grep -i "GoLogin" | head -n 1)          
@@ -76,16 +88,22 @@ jobs:
           RUSTDESK="com.carriez.rustdesk"          
           HOPTODESK="com.hoptodesk.hoptodesk"          
           CRD_HOST="com.google.chromeremotedesktop.me2me-host"                    
+          
+          # kTCCServicePostEvent is the permission required for Ctrl+C / Ctrl+V
           SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")          
           APPS=("$RUSTDESK" "$HOPTODESK" "$CRD_HOST")          
+          
           if [[ "${{ github.event.inputs.macos_version }}" == "macos-14" ]]; then            
             APPS+=("com.gologin.app" "com.mostlogin.browser")          
           fi          
+          
           SYS_TCC="/Library/Application Support/com.apple.TCC/TCC.db"          
           USER_TCC="$HOME/Library/Application Support/com.apple.TCC/TCC.db"          
+          
           sudo launchctl stop com.apple.tccd || true          
           sudo killall -9 tccd || true          
           sleep 2          
+          
           for DB in "$SYS_TCC" "$USER_TCC"; do            
             sudo mkdir -p "$(dirname "$DB")"            
             if [ ! -f "$DB" ]; then sudo touch "$DB"; fi            
@@ -95,33 +113,38 @@ jobs:
               done            
             done          
           done          
+          
           sudo launchctl start com.apple.tccd || true          
-          echo "✅ Keystroke and Clipboard permissions injected"      
+          echo "✅ Full Control and Clipboard permissions injected"      
 
       - name: "🚀 Configure Passwords"        
         run: |          
           PW="${{ github.event.inputs.REMOTE_PASSWORD }}"                    
+          
           # 1. RustDesk Setup          
           sudo defaults write /Library/Preferences/com.carriez.RustDesk.plist password "$PW"          
           open -a "RustDesk"          
           sleep 5          
           sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "$PW"                    
+          
           # 2. HopToDesk Setup
-          # HopToDesk shares many CLI commands with RustDesk, making it very stable for GHA
           open -a "HopToDesk"
-          sleep 8
-          sudo /Applications/HopToDesk.app/Contents/MacOS/hoptodesk --password "$PW"
+          sleep 10
+          # Setting password via CLI binary
+          sudo /Applications/HopToDesk.app/Contents/MacOS/HopToDesk --password "$PW"
           echo "✅ Passwords configured for both tools"      
 
       - name: "📸 Extract IDs & Final Console Log"        
         run: |          
           echo "⏳ Gathering IDs..."          
-          sleep 15          
-          R_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Check Screenshot")          
-          H_ID=$(/Applications/HopToDesk.app/Contents/MacOS/hoptodesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Check Screenshot")          
+          sleep 20          
+          
+          R_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Not Found")          
+          H_ID=$(/Applications/HopToDesk.app/Contents/MacOS/HopToDesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Not Found")          
           
           screencapture -x /tmp/ready.png          
           URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/ready.png" https://catbox.moe/user/api.php)          
+          
           echo "------------------------------------------------------"          
           echo "🆔 RUSTDESK ID:  $R_ID"          
           echo "🆔 HOPTODESK ID: $H_ID"          
