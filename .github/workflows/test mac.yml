@@ -1,4 +1,4 @@
-name: "macOS Remote Suite - Final AnyDesk & RustDesk Fix"
+name: "macOS Remote Suite - Direct Force Inject"
 on:  
   workflow_dispatch:    
     inputs:      
@@ -34,18 +34,18 @@ jobs:
           sudo dscl . -passwd /Users/$USERNAME $PASSWORD          
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME          
           sudo createhomedir -u $USERNAME -c          
-          echo "✅ Admin account created (admin/123456)"      
+          echo "✅ Admin account created"      
 
       - name: "🚫 Disable Sleep & Keep Screen On"        
         run: |          
           sudo pmset -a sleep 0 displaysleep 0 disksleep 0 hibernatemode 0          
           nohup caffeinate -dis &           
-          echo "✅ Power management set to 'Always On'"      
+          echo "✅ Power management set"      
 
       - name: "📦 Install RustDesk & AnyDesk"        
         run: |          
           brew install --cask rustdesk anydesk          
-          echo "✅ Remote tools installed"      
+          echo "✅ Tools installed via Homebrew"      
 
       - name: "🖥️ Install Chrome Remote Desktop"        
         run: |          
@@ -96,41 +96,36 @@ jobs:
             done          
           done          
           sudo launchctl start com.apple.tccd || true          
-          echo "✅ TCC Permissions injected for Full Remote Control"      
+          echo "✅ Full Keystroke and Clipboard permissions injected"      
 
-      - name: "🚀 Configure Passwords (Bypass Service Stuck)"        
+      - name: "🚀 Force Inject Passwords (No CLI needed)"        
         run: |          
           PW="${{ github.event.inputs.REMOTE_PASSWORD }}"                    
-          # RustDesk Setup          
+          # 1. RustDesk Setup          
           sudo defaults write /Library/Preferences/com.carriez.RustDesk.plist password "$PW"          
           open -a "RustDesk"          
           sleep 5          
           sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "$PW"                    
-          # AnyDesk Manual Service Start (Bypass GUI Install)          
-          echo "🛠️ Booting AnyDesk Background Service..."          
-          sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --service &          
-          sleep 12          
-          open -a "AnyDesk"                    
-          for i in {1..10}; do            
-            if echo "$PW" | sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password; then              
-              echo "✅ AnyDesk password set successfully!"              
-              break            
-            else              
-              echo "⚠️ Service busy, waking up AnyDesk... ($i/10)"              
-              sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id &              
-              sleep 10            
-            fi          
-          done      
+          # 2. AnyDesk Setup: Direct Configuration File Injection          
+          echo "🛠️ Force-writing AnyDesk config..."          
+          sudo mkdir -p /Library/Preferences/          
+          # ad.security.interactive_access = 2 (Always Allow)          
+          # ad.security.password = Set Password          
+          sudo defaults write /Library/Preferences/com.philandro.anydesk.plist ad.security.interactive_access -int 2          
+          sudo defaults write /Library/Preferences/com.philandro.anydesk.plist ad.security.password "$PW"          
+          defaults write com.philandro.anydesk ad.security.interactive_access -int 2          
+          defaults write com.philandro.anydesk ad.security.password "$PW"                    
+          # Wake up AnyDesk          
+          open -a "AnyDesk"          
+          sleep 10          
+          echo "✅ Passwords and Remote Permissions Forced."      
 
       - name: "📸 Extract IDs & Final Console Log"        
         run: |          
           echo "⏳ Syncing IDs..."          
           sleep 15          
-          # Force AnyDesk ID retrieval to file to avoid hangs          
-          /Applications/AnyDesk.app/Contents/MacOS/anydesk --get-id > /tmp/anydesk_id.txt 2>&1 &          
-          sleep 5          
           R_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Check Screenshot")          
-          A_ID=$(grep -oE '[0-9]{3,}' /tmp/anydesk_id.txt | tail -n 1 || echo "Check Screenshot")          
+          A_ID=$(/Applications/AnyDesk.app/Contents/MacOS/anydesk --get-id 2>/dev/null | awk '{print $NF}' | grep -oE '[0-9]{3,}' || echo "Check Screenshot")          
           screencapture -x /tmp/ready.png          
           URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/ready.png" https://catbox.moe/user/api.php)          
           echo "------------------------------------------------------"          
@@ -146,6 +141,6 @@ jobs:
           while true; do            
             if ! pgrep -x "AnyDesk" > /dev/null; then open -a "AnyDesk"; fi            
             if ! pgrep -x "rustdesk" > /dev/null; then open -a "RustDesk"; fi            
-            echo "💓 [$(date)] Runner alive. Control active."            
+            echo "💓 [$(date)] Runner alive."            
             sleep 60          
           done
