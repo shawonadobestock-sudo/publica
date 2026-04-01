@@ -1,4 +1,4 @@
-name: "macOS Remote Suite - Full Keystroke & Clipboard"
+name: "macOS Remote Suite - RustDesk & AnyDesk Full"
 on:
   workflow_dispatch:
     inputs:
@@ -26,8 +26,14 @@ jobs:
           USERNAME="admin"
           PASSWORD="123456"
           sudo dscl . -create /Users/$USERNAME
+          sudo dscl . -create /Users/$USERNAME UserShell /bin/zsh
+          sudo dscl . -create /Users/$USERNAME RealName "Admin User"
+          sudo dscl . -create /Users/$USERNAME UniqueID "502"
+          sudo dscl . -create /Users/$USERNAME PrimaryGroupID 20
+          sudo dscl . -create /Users/$USERNAME NFSHomeDirectory /Users/$USERNAME
           sudo dscl . -passwd /Users/$USERNAME $PASSWORD
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME
+          sudo createhomedir -u $USERNAME -c
           echo "✅ Admin account created (admin/123456)"
 
       - name: "🚫 Disable Sleep & Keep Screen On"
@@ -69,21 +75,16 @@ jobs:
 
       - name: "🔓 Inject Permissions (Ctrl+C/V & Remote Control Fix)"
         run: |
-          # Bundle IDs for all target apps
           RUSTDESK="com.carriez.rustdesk"
           ANYDESK="com.philandro.anydesk"
           CRD_HOST="com.google.chromeremotedesktop.me2me-host"
-          GOLOGIN="com.gologin.app"
-          MOSTLOGIN="com.mostlogin.browser"
-
-          # Required services for Copy/Paste and Keystrokes
-          # kTCCServicePostEvent: Allows simulating keys (Ctrl/Cmd)
-          # kTCCServiceAccessibility: Allows the app to control the UI
+          
+          # kTCCServicePostEvent & Accessibility are key for Ctrl+C/V (Command+C/V)
           SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")
           APPS=("$RUSTDESK" "$ANYDESK" "$CRD_HOST")
 
           if [[ "${{ github.event.inputs.macos_version }}" == "macos-14" ]]; then
-            APPS+=("$GOLOGIN" "$MOSTLOGIN")
+            APPS+=("com.gologin.app" "com.mostlogin.browser")
           fi
 
           SYS_TCC="/Library/Application Support/com.apple.TCC/TCC.db"
@@ -98,43 +99,54 @@ jobs:
             if [ ! -f "$DB" ]; then sudo touch "$DB"; fi
             for APP in "${APPS[@]}"; do
               for SERVICE in "${SERVICES[@]}"; do
-                # Injecting 'auth_value = 2' (Allowed) for every app/service combo
                 sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$SERVICE', '$APP', 0, 2, 4, 1, 0, strftime('%s','now'));"
               done
             done
           done
           
           sudo launchctl start com.apple.tccd || true
-          echo "✅ Full Keystroke and Clipboard permissions injected"
+          echo "✅ Permissions injected for Clipboard and Input Control"
 
-      - name: "🚀 Configure Passwords & Start Apps"
+      - name: "🚀 Configure Passwords (Fix Exit Code 64)"
         run: |
           PW="${{ github.event.inputs.REMOTE_PASSWORD }}"
           
-          # RustDesk Password
+          # RustDesk Setup
           sudo defaults write /Library/Preferences/com.carriez.RustDesk.plist password "$PW"
           open -a "RustDesk"
-          sleep 2
+          sleep 5
           sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "$PW"
           
-          # AnyDesk Password (using standard CLI flag)
-          echo "$PW" | sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password
+          # AnyDesk Setup with Retry Loop to ensure service is alive
+          echo "🔄 Initializing AnyDesk Service..."
           open -a "AnyDesk"
+          sleep 12 
           
-          echo "✅ Remote passwords set to: $PW"
+          for i in {1..6}; do
+            if echo "$PW" | sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password; then
+              echo "✅ AnyDesk password set successfully!"
+              break
+            else
+              echo "⚠️ AnyDesk service not ready (Code 64), retrying in 8s... ($i/6)"
+              open -a "AnyDesk"
+              sleep 8
+            fi
+          done
 
       - name: "📸 Extract IDs & Final Console Log"
         run: |
-          echo "⏳ Waiting for IDs to register..."
-          sleep 20
+          echo "⏳ Syncing IDs..."
+          sleep 15
           
-          # Get IDs via CLI
-          R_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Unknown")
-          A_ID=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null | awk '{print $NF}' | grep -oE '[0-9]+' || echo "Unknown")
+          # Get RustDesk ID
+          R_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Check Screenshot")
           
-          # Visual confirmation
-          screencapture -x /tmp/final.png
-          URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/final.png" https://catbox.moe/user/api.php)
+          # Get AnyDesk ID
+          A_ID=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id 2>/dev/null | awk '{print $NF}' | grep -oE '[0-9]+' || echo "Check Screenshot")
+          
+          # Capture Screenshot
+          screencapture -x /tmp/ready.png
+          URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/ready.png" https://catbox.moe/user/api.php)
 
           echo "------------------------------------------------------"
           echo "🆔 RUSTDESK ID: $R_ID"
@@ -144,11 +156,14 @@ jobs:
           echo "👤 ADMIN USER:  admin | PASS: 123456"
           echo "------------------------------------------------------"
 
-      - name: "🔄 Keep Alive Heartbeat"
+      - name: "🔄 Connection Loop & Heartbeat"
         run: |
           while true; do
-            # Refresh AnyDesk & RustDesk if they crash
+            # Ensure apps stay open
             if ! pgrep -x "AnyDesk" > /dev/null; then open -a "AnyDesk"; fi
             if ! pgrep -x "rustdesk" > /dev/null; then open -a "RustDesk"; fi
+            
+            # Simple heartbeat to console
+            echo "💓 [$(date)] Runner alive. Sessions monitored."
             sleep 60
           done
