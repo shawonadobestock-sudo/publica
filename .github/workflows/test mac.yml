@@ -1,4 +1,4 @@
-name: "macOS Remote Suite - RustDesk & HopToDesk"
+name: "macOS Remote Suite - Monterey Clean"
 on:  
   workflow_dispatch:    
     inputs:      
@@ -12,7 +12,7 @@ on:
           - "macos-15"          
           - "macos-14"      
       REMOTE_PASSWORD:        
-        description: "Set password for RustDesk & HopToDesk"        
+        description: "Set password for HopToDesk"        
         default: "password123"        
         required: true
 
@@ -26,15 +26,9 @@ jobs:
           USERNAME="admin"          
           PASSWORD="123456"          
           sudo dscl . -create /Users/$USERNAME          
-          sudo dscl . -create /Users/$USERNAME UserShell /bin/zsh          
-          sudo dscl . -create /Users/$USERNAME RealName "Admin User"          
-          sudo dscl . -create /Users/$USERNAME UniqueID "502"          
-          sudo dscl . -create /Users/$USERNAME PrimaryGroupID 20          
-          sudo dscl . -create /Users/$USERNAME NFSHomeDirectory /Users/$USERNAME          
           sudo dscl . -passwd /Users/$USERNAME $PASSWORD          
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME          
-          sudo createhomedir -u $USERNAME -c          
-          echo "✅ Admin account created (admin/123456)"      
+          echo "✅ Admin account created"      
 
       - name: "🚫 Disable Sleep & Keep Screen On"        
         run: |          
@@ -42,20 +36,14 @@ jobs:
           nohup caffeinate -dis &           
           echo "✅ Power management set"      
 
-      - name: "📦 Install RustDesk & HopToDesk"        
+      - name: "📦 Install HopToDesk"        
         run: |          
-          # Install RustDesk via Brew
-          brew install --cask rustdesk
-          
-          # Install HopToDesk via DMG
-          echo "📥 Downloading HopToDesk..."
           curl -L -o /tmp/hoptodesk.dmg "https://www.hoptodesk.com/HopToDesk.dmg"
           sudo hdiutil attach /tmp/hoptodesk.dmg -nobrowse
-          # Find the mount point dynamically as it may vary
           MOUNT_POINT=$(ls /Volumes | grep -i "HopToDesk" | head -n 1)
           sudo cp -R "/Volumes/$MOUNT_POINT/HopToDesk.app" /Applications/
           sudo hdiutil detach "/Volumes/$MOUNT_POINT" -force
-          echo "✅ Remote tools installed"      
+          echo "✅ HopToDesk installed"      
 
       - name: "🖥️ Install Chrome Remote Desktop"        
         run: |          
@@ -69,13 +57,11 @@ jobs:
       - name: "🌐 Install Antidetect Browsers (macOS 14 Only)"        
         if: github.event.inputs.macos_version == 'macos-14'        
         run: |          
-          # MostLogin
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-arm64-setup.dmg"          
           sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse          
           MOUNT_ML=$(ls /Volumes | grep -i "MostLogin" | head -n 1)          
           sudo cp -R "/Volumes/$MOUNT_ML/MostLogin.app" /Applications/          
           sudo hdiutil detach "/Volumes/$MOUNT_ML" -force
-          # GoLogin          
           curl -L -o /tmp/gologin.dmg "https://dl.gologin.com/gologin-arm64.dmg"          
           sudo hdiutil attach /tmp/gologin.dmg -nobrowse          
           MOUNT_GL=$(ls /Volumes | grep -i "GoLogin" | head -n 1)          
@@ -83,19 +69,32 @@ jobs:
           sudo hdiutil detach "/Volumes/$MOUNT_GL" -force          
           echo "✅ Browsers installed"      
 
+      - name: "🧹 Clean Dock & Set Monterey Wallpaper"        
+        run: |          
+          # Remove all unwanted apps from Dock
+          defaults write com.apple.dock persistent-apps -array
+          
+          # Add only useful apps back to Dock
+          DOCK_APPS=("/Applications/HopToDesk.app" "/Applications/Google Chrome.app")
+          for APP in "${DOCK_APPS[@]}"; do
+            if [ -d "$APP" ]; then
+              defaults write com.apple.dock persistent-apps -array-add "<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>$APP</string><key>_CFURLStringType</key><integer>0</integer></dict></dict></dict>"
+            fi
+          done
+          
+          # Restart Dock to apply changes
+          killall Dock
+          
+          # Set Monterey Wallpaper (Official Graphic Path)
+          osascript -e 'tell application "System Events" to set picture of every desktop to "/System/Library/Desktop Pictures/Monterey Graphic.heic"'
+          echo "✅ Dock cleaned and Wallpaper set"
+
       - name: "🔓 Inject Permissions (Ctrl+C/V & Remote Control)"        
         run: |          
-          RUSTDESK="com.carriez.rustdesk"          
-          HOPTODESK="com.hoptodesk.hoptodesk"          
-          CRD_HOST="com.google.chromeremotedesktop.me2me-host"                    
-          
-          # kTCCServicePostEvent is the permission required for Ctrl+C / Ctrl+V
+          H_BUNDLE="com.hoptodesk.hoptodesk"          
+          CRD_BUNDLE="com.google.chromeremotedesktop.me2me-host"                    
           SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")          
-          APPS=("$RUSTDESK" "$HOPTODESK" "$CRD_HOST")          
-          
-          if [[ "${{ github.event.inputs.macos_version }}" == "macos-14" ]]; then            
-            APPS+=("com.gologin.app" "com.mostlogin.browser")          
-          fi          
+          APPS=("$H_BUNDLE" "$CRD_BUNDLE")          
           
           SYS_TCC="/Library/Application Support/com.apple.TCC/TCC.db"          
           USER_TCC="$HOME/Library/Application Support/com.apple.TCC/TCC.db"          
@@ -115,49 +114,35 @@ jobs:
           done          
           
           sudo launchctl start com.apple.tccd || true          
-          echo "✅ Full Control and Clipboard permissions injected"      
+          echo "✅ Permissions injected"      
 
-      - name: "🚀 Configure Passwords"        
+      - name: "🚀 Configure HopToDesk Password"        
         run: |          
           PW="${{ github.event.inputs.REMOTE_PASSWORD }}"                    
-          
-          # 1. RustDesk Setup          
-          sudo defaults write /Library/Preferences/com.carriez.RustDesk.plist password "$PW"          
-          open -a "RustDesk"          
-          sleep 5          
-          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "$PW"                    
-          
-          # 2. HopToDesk Setup
           open -a "HopToDesk"
-          sleep 10
-          # Setting password via CLI binary
+          sleep 12
           sudo /Applications/HopToDesk.app/Contents/MacOS/HopToDesk --password "$PW"
-          echo "✅ Passwords configured for both tools"      
+          echo "✅ Password set"      
 
-      - name: "📸 Extract IDs & Final Console Log"        
+      - name: "📸 Extract ID & Final Console Log"        
         run: |          
-          echo "⏳ Gathering IDs..."          
-          sleep 20          
-          
-          R_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Not Found")          
-          H_ID=$(/Applications/HopToDesk.app/Contents/MacOS/HopToDesk --get-id 2>/dev/null | grep -oE '[0-9]+' || echo "Not Found")          
-          
+          sleep 15          
+          H_ID=$(/Applications/HopToDesk.app/Contents/MacOS/HopToDesk --get-id 2>/dev/null | grep -oE '[0-9]+' | head -n 1 || echo "Not Found")          
           screencapture -x /tmp/ready.png          
           URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/ready.png" https://catbox.moe/user/api.php)          
-          
           echo "------------------------------------------------------"          
-          echo "🆔 RUSTDESK ID:  $R_ID"          
           echo "🆔 HOPTODESK ID: $H_ID"          
           echo "🔗 ID SCREENSHOT: $URL"          
           echo "🔑 REMOTE PASS:  ${{ github.event.inputs.REMOTE_PASSWORD }}"          
           echo "👤 ADMIN USER:   admin | PASS: 123456"          
           echo "------------------------------------------------------"      
 
-      - name: "🔄 Connection Loop & Heartbeat"        
+      - name: "🔄 Quiet Connection Loop"        
         run: |          
           while true; do            
-            if ! pgrep -x "HopToDesk" > /dev/null; then open -a "HopToDesk"; fi            
-            if ! pgrep -x "rustdesk" > /dev/null; then open -a "RustDesk"; fi            
-            echo "💓 [$(date)] Runner alive."            
-            sleep 60          
+            CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "21116|21117|443" | wc -l)
+            if [ "$CONN_COUNT" -le 3 ]; then
+                if ! pgrep -x "HopToDesk" > /dev/null; then open -a "HopToDesk"; fi
+            fi
+            sleep 120          
           done
