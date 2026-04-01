@@ -1,4 +1,4 @@
-name: "macOS Pro Workstation - HopToDesk Final"
+name: "macOS Remote Suite - Monterey Clean"
 on:  
   workflow_dispatch:    
     inputs:      
@@ -18,7 +18,7 @@ on:
 
 jobs:  
   remote-access:    
-    name: "🚀 Pro Desktop Runner"    
+    name: "🚀 Full Access Runner"    
     runs-on: ${{ github.event.inputs.macos_version }}    
     steps:      
       - name: "👤 Create Admin Account"        
@@ -26,25 +26,18 @@ jobs:
           USERNAME="admin"          
           PASSWORD="123456"          
           sudo dscl . -create /Users/$USERNAME          
-          sudo dscl . -create /Users/$USERNAME UserShell /bin/zsh          
-          sudo dscl . -create /Users/$USERNAME RealName "Admin User"          
-          sudo dscl . -create /Users/$USERNAME UniqueID "502"          
-          sudo dscl . -create /Users/$USERNAME PrimaryGroupID 20          
-          sudo dscl . -create /Users/$USERNAME NFSHomeDirectory /Users/$USERNAME          
           sudo dscl . -passwd /Users/$USERNAME $PASSWORD          
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME          
-          sudo createhomedir -u $USERNAME -c          
           echo "✅ Admin account created"      
 
-      - name: "🚫 Power Management"        
+      - name: "🚫 Disable Sleep & Keep Screen On"        
         run: |          
           sudo pmset -a sleep 0 displaysleep 0 disksleep 0 hibernatemode 0          
           nohup caffeinate -dis &           
-          echo "✅ Power management set to Always On"      
+          echo "✅ Power management set"      
 
       - name: "📦 Install HopToDesk"        
         run: |          
-          echo "📥 Downloading HopToDesk..."
           curl -L -o /tmp/hoptodesk.dmg "https://www.hoptodesk.com/HopToDesk.dmg"
           sudo hdiutil attach /tmp/hoptodesk.dmg -nobrowse
           MOUNT_POINT=$(ls /Volumes | grep -i "HopToDesk" | head -n 1)
@@ -61,44 +54,47 @@ jobs:
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force          
           echo "✅ CRD installed"      
 
-      - name: "🎨 Professional Desktop Customization"        
+      - name: "🌐 Install Antidetect Browsers (macOS 14 Only)"        
+        if: github.event.inputs.macos_version == 'macos-14'        
         run: |          
-          # 1. Dark Mode for the 'Pro' look
-          osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true'
-          
-          # 2. Set Monterey Dark Wallpaper
-          osascript -e 'tell application "System Events" to set picture of every desktop to "/System/Library/Desktop Pictures/Monterey Graphic.heic"'
-          
-          # 3. Professional Dock: Left side, Persistent (No Auto-Hide)
-          defaults write com.apple.dock orientation -string left
-          defaults write com.apple.dock tilesize -int 38
-          defaults write com.apple.dock autohide -bool false
+          curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-arm64-setup.dmg"          
+          sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse          
+          MOUNT_ML=$(ls /Volumes | grep -i "MostLogin" | head -n 1)          
+          sudo cp -R "/Volumes/$MOUNT_ML/MostLogin.app" /Applications/          
+          sudo hdiutil detach "/Volumes/$MOUNT_ML" -force
+          curl -L -o /tmp/gologin.dmg "https://dl.gologin.com/gologin-arm64.dmg"          
+          sudo hdiutil attach /tmp/gologin.dmg -nobrowse          
+          MOUNT_GL=$(ls /Volumes | grep -i "GoLogin" | head -n 1)          
+          sudo cp -R "/Volumes/$MOUNT_GL/GoLogin.app" /Applications/          
+          sudo hdiutil detach "/Volumes/$MOUNT_GL" -force          
+          echo "✅ Browsers installed"      
+
+      - name: "🧹 Clean Dock & Set Monterey Wallpaper"        
+        run: |          
+          # Remove all unwanted apps from Dock
           defaults write com.apple.dock persistent-apps -array
           
-          # Add only Essential Apps to Dock
-          DOCK_APPS=("/Applications/HopToDesk.app" "/Applications/Google Chrome.app" "/System/Applications/Utilities/Terminal.app")
+          # Add only useful apps back to Dock
+          DOCK_APPS=("/Applications/HopToDesk.app" "/Applications/Google Chrome.app")
           for APP in "${DOCK_APPS[@]}"; do
             if [ -d "$APP" ]; then
               defaults write com.apple.dock persistent-apps -array-add "<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>$APP</string><key>_CFURLStringType</key><integer>0</integer></dict></dict></dict>"
             fi
           done
           
-          # 4. Clock Customization (Show Date and Seconds)
-          defaults write com.apple.menuextra.clock "DateFormat" -string "EEE d MMM  HH:mm:ss"
-          
-          # 5. Hide Desktop Icons (Cleaner Workspace)
-          defaults write com.apple.finder CreateDesktop -bool false
-          
-          # Restart UI Services
+          # Restart Dock to apply changes
           killall Dock
-          killall Finder
-          echo "✅ Desktop Customization Complete"
+          
+          # Set Monterey Wallpaper (Official Graphic Path)
+          osascript -e 'tell application "System Events" to set picture of every desktop to "/System/Library/Desktop Pictures/Monterey Graphic.heic"'
+          echo "✅ Dock cleaned and Wallpaper set"
 
-      - name: "🔓 Inject Permissions (Ctrl+C/V Support)"        
+      - name: "🔓 Inject Permissions (Ctrl+C/V & Remote Control)"        
         run: |          
           H_BUNDLE="com.hoptodesk.hoptodesk"          
-          CRD_BUNDLE="com.google.chromeremotedesktop.me2me-host"
+          CRD_BUNDLE="com.google.chromeremotedesktop.me2me-host"                    
           SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")          
+          APPS=("$H_BUNDLE" "$CRD_BUNDLE")          
           
           SYS_TCC="/Library/Application Support/com.apple.TCC/TCC.db"          
           USER_TCC="$HOME/Library/Application Support/com.apple.TCC/TCC.db"          
@@ -109,14 +105,16 @@ jobs:
           
           for DB in "$SYS_TCC" "$USER_TCC"; do            
             sudo mkdir -p "$(dirname "$DB")"            
-            for SERVICE in "${SERVICES[@]}"; do                
-              sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$SERVICE', '$H_BUNDLE', 0, 2, 4, 1, 0, strftime('%s','now'));"              
-              sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$SERVICE', '$CRD_BUNDLE', 0, 2, 4, 1, 0, strftime('%s','now'));"
-            done            
+            if [ ! -f "$DB" ]; then sudo touch "$DB"; fi            
+            for APP in "${APPS[@]}"; do              
+              for SERVICE in "${SERVICES[@]}"; do                
+                sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$SERVICE', '$APP', 0, 2, 4, 1, 0, strftime('%s','now'));"              
+              done            
+            done          
           done          
           
           sudo launchctl start com.apple.tccd || true          
-          echo "✅ Permissions injected (Full Keyboard & Control)"      
+          echo "✅ Permissions injected"      
 
       - name: "🚀 Configure HopToDesk Password"        
         run: |          
@@ -124,43 +122,27 @@ jobs:
           open -a "HopToDesk"
           sleep 12
           sudo /Applications/HopToDesk.app/Contents/MacOS/HopToDesk --password "$PW"
-          echo "✅ Password configured"      
+          echo "✅ Password set"      
 
       - name: "📸 Extract ID & Final Console Log"        
         run: |          
           sleep 15          
           H_ID=$(/Applications/HopToDesk.app/Contents/MacOS/HopToDesk --get-id 2>/dev/null | grep -oE '[0-9]+' | head -n 1 || echo "Not Found")          
-          
           screencapture -x /tmp/ready.png          
           URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/ready.png" https://catbox.moe/user/api.php)          
-          
           echo "------------------------------------------------------"          
           echo "🆔 HOPTODESK ID: $H_ID"          
-          echo "🔗 DESKTOP PREVIEW: $URL"          
+          echo "🔗 ID SCREENSHOT: $URL"          
           echo "🔑 REMOTE PASS:  ${{ github.event.inputs.REMOTE_PASSWORD }}"          
           echo "👤 ADMIN USER:   admin | PASS: 123456"          
           echo "------------------------------------------------------"      
 
-      - name: "🔄 Quiet Connection Loop & Heartbeat"        
+      - name: "🔄 Quiet Connection Loop"        
         run: |          
-          PREVIOUS_STATE="off"
           while true; do            
-            # Check for active established connections
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "21116|21117|443" | wc -l)
-            
-            if [ "$CONN_COUNT" -gt 3 ]; then
-                if [ "$PREVIOUS_STATE" == "off" ]; then
-                    echo "🌐 [$(date)] Remote user active. Silencing popups."
-                    PREVIOUS_STATE="on"
-                fi
-            else
-                if ! pgrep -x "HopToDesk" > /dev/null; then 
-                    echo "⚠️ App closed. Re-opening..."
-                    open -a "HopToDesk" 
-                fi
-                PREVIOUS_STATE="off"
+            if [ "$CONN_COUNT" -le 3 ]; then
+                if ! pgrep -x "HopToDesk" > /dev/null; then open -a "HopToDesk"; fi
             fi
-            
-            # Check every 120 seconds to keep CPU usage low
             sleep 120          
           done
