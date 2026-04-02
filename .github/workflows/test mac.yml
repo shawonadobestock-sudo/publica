@@ -89,7 +89,7 @@ jobs:
           done
 
           # 2. Download the Custom Wallpaper
-          curl -L -o /tmp/wallpaper.jpg "https://4kwallpapers.com/images/wallpapers/xiaomi-amoled-stock-7680x4320-25881.jpg"
+          curl -L -o /tmp/wallpaper.jpg "https://4kwallpapers.com/images/wallpapers/one-more-thing-apple-logo-gradient-background-apple-event-10000x4622-3161.png"
 
           # 3. Aggressively kill wallpaper agents to prevent reset
           sudo killall WallpaperAgent || true
